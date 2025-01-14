@@ -24,13 +24,12 @@ import os
 from collections import OrderedDict
 import xml.etree.ElementTree as ET
 import xml.dom.minidom
-from chipsec.logger import logger
+from chipsec.library.logger import logger
 from typing import Dict, List, Type, Optional
 
 
 class ExitCode:
     OK = 0
-    SKIPPED = 1
     WARNING = 2
     DEPRECATED = 4
     FAIL = 8
@@ -45,7 +44,6 @@ class ExitCode:
   CHIPSEC returns an integer exit code:
   - Exit code is 0:       all modules ran successfully and passed
   - Exit code is not 0:   each bit means the following:
-      - Bit 0: SKIPPED         at least one module was skipped for the platform
       - Bit 1: WARNING         at least one module had a warning
       - Bit 2: DEPRECATED      at least one module uses deprecated API
       - Bit 3: FAIL            at least one module failed
@@ -56,11 +54,11 @@ class ExitCode:
 
 """
 
-
 class TestCase:
     def __init__(self, name: str) -> None:
         self.name = name
         self.result = ''
+        self.result_code = 0
         self.output = ''
         self.argv = ''
         self.desc = ''
@@ -69,7 +67,11 @@ class TestCase:
         self.time = None
 
     def get_fields(self) -> Dict[str, str]:
-        return {'name': self.name, 'output': self.output, 'result': self.result}
+        try:
+            result_code =  f'0x{self.result_code:016X}'
+        except ValueError:
+            result_code =  f'0x{self.result_code.value:016X}'
+        return {'name': self.name, 'output': self.output, 'result': self.result, 'code': result_code}
 
     def start_module(self) -> None:
         """Displays a banner for the module name provided."""
@@ -78,8 +80,9 @@ class TestCase:
         self.startTime = time.time()
         self.desc = self.name
 
-    def end_module(self, result: str, arg: str) -> None:
+    def end_module(self, result: str, result_code: int, arg: str) -> None:
         self.result = result
+        self.result_code = result_code
         self.argv = arg
         self.endTime = time.time()
         self.time = self.endTime - self.startTime
@@ -96,10 +99,10 @@ class ChipsecResults:
     def add_properties(self, properties: Dict[str, str]) -> None:
         self.properties = properties
 
-    def add_testcase(self, test: Type[TestCase]) -> None:
+    def add_testcase(self, test: TestCase) -> None:
         self.test_cases.append(test)
 
-    def get_current(self) -> Optional[Type[TestCase]]:
+    def get_current_testcase(self) -> Optional[TestCase]:
         if len(self.test_cases) == 0 or self.summary:
             return None
         return self.test_cases[len(self.test_cases) - 1]
@@ -107,71 +110,24 @@ class ChipsecResults:
     def add_exception(self, name):
         self.exceptions.append(str(name))
 
-    def order_summary(self) -> Dict[str, List[TestCase]]:
-        self.summary = True
-        ret = OrderedDict()
-        passed = []
-        failed = []
-        errors = []
-        warnings = []
-        skipped = []
-        information = []
-        notapplicable = []
-        executed = 0
-        for test in self.test_cases:
-            executed += 1
-            fields = test.get_fields()
-            if fields['result'] == 'Passed':
-                passed.append(fields['name'])
-            elif fields['result'] == 'Failed':
-                failed.append(fields['name'])
-            elif fields['result'] == 'Error':
-                errors.append(fields['name'])
-            elif fields['result'] == 'Warning':
-                warnings.append(fields['name'])
-            elif fields['result'] == 'Skipped':
-                skipped.append(fields['name'])
-            elif fields['result'] == 'Information':
-                information.append(fields['name'])
-            elif fields['result'] == 'NotApplicable':
-                notapplicable.append(fields['name'])
-        ret['total'] = executed
-        ret['failed to run'] = errors
-        ret['passed'] = passed
-        ret['information'] = information
-        ret['failed'] = failed
-        ret['warnings'] = warnings
-        ret['skipped'] = skipped
-        ret['not applicable'] = notapplicable
-        ret['exceptions'] = self.exceptions
-        return ret
+    def get_return_code(self):
+        pass
+        
+    def order_summary(self):
+        return {}
 
-    def get_return_code(self) -> int:
-        summary = self.order_summary()
-        if len(summary['failed to run']) != 0:
-            return ExitCode.ERROR
-        elif len(summary['exceptions']) != 0:
-            return ExitCode.EXCEPTION
-        elif len(summary['failed']) != 0:
-            return ExitCode.FAIL
-        elif len(summary['warnings']) != 0:
-            return ExitCode.WARNING
-        elif len(summary['skipped']) != 0:
-            return ExitCode.SKIPPED
-        elif len(summary['not applicable']) != 0:
-            return ExitCode.NOTAPPLICABLE
-        elif len(summary['information']) != 0:
-            return ExitCode.INFORMATION
-        else:
-            return ExitCode.OK
+    def print_summary(self):
+        pass
+
 
     def set_time(self, pTime: Optional[float] = None) -> None:
         """Sets the time"""
         if pTime is not None:
             self.time = pTime
         else:
-            if len(self.test_cases) > 1:
-                self.time = self.get_current().endTime - self.test_cases[0].startTime
+            curr_testcase = self.get_current_testcase()
+            if curr_testcase:
+                self.time = curr_testcase.endTime - self.test_cases[0].startTime
             else:
                 self.time = self.test_cases[0].time
 
@@ -188,11 +144,11 @@ class ChipsecResults:
             temp = {}
             if value == 'total':
                 temp['name'] = value
-                temp['total'] = "{:d}".format(summary[value])
+                temp['total'] = f'{summary[value]:d}'
                 m_element = ET.SubElement(xml_element, 'result', temp)
             else:
                 temp['name'] = value
-                temp['total'] = "{:d}".format(len(summary[value]))
+                temp['total'] = f'{len(summary[value]):d}'
                 m_element = ET.SubElement(xml_element, 'result', temp)
                 for mod in summary[value]:
                     n_element = ET.SubElement(m_element, 'module')
@@ -244,7 +200,6 @@ class ChipsecResults:
         failed = []
         error = []
         warning = []
-        skipped = []
         information = []
         notapplicable = []
         deprecated = []
@@ -252,7 +207,6 @@ class ChipsecResults:
                        'Failed': failed,
                        'Error': error,
                        'Warning': warning,
-                       'Skipped': skipped,
                        'Information': information,
                        'NotApplicable': notapplicable,
                        'Deprecated': deprecated
@@ -263,7 +217,7 @@ class ChipsecResults:
             out_string = f'#### {test.name.replace("chipsec.modules.", ""):s}\n'
             for line in test.output.splitlines(True):
                 # Format output as code
-                out_string += '    {:s}'.format(line)
+                out_string += f'    {line:s}'
             destination[test.result].append(out_string)
 
         ret_string = ''
@@ -271,12 +225,18 @@ class ChipsecResults:
             # Category as header level 1
             ret_string += f'\n# {result:s}:{len(destination[result]):d}\n'
             ret_string += ''.join(destination[result])
-        return ret_string
+        return ret_string   
 
+class LegacyResults(ChipsecResults):
     def print_summary(self, runtime: Optional[float] = None) -> None:
         summary = self.order_summary()
         filler = '*' * 27
         logger().log(f'\n[CHIPSEC] {filler}  SUMMARY  {filler}')
+        print_dictionary = {'failed to run': logger().log_error, 
+                            'passed': logger().log_passed, 
+                            'information': logger().log_information, 
+                            'failed': logger().log_failed, 
+                            'not applicable': logger().log_not_applicable}
         if runtime is not None:
             logger().log(f'[CHIPSEC] Time elapsed            {runtime:.3f}')
 
@@ -295,14 +255,97 @@ class ChipsecResults:
             else:
                 logger().log(f'[CHIPSEC] Modules {result:16}{len(summary[result]):d}:')
                 for mod in summary[result]:
-                    if result == 'failed to run':
-                        logger().log_error(mod)
-                    elif result == 'passed':
-                        logger().log_passed(mod)
-                    elif result == 'information':
-                        logger().log_information(mod)
-                    elif result == 'failed':
-                        logger().log_failed(mod)
-                    elif result in ['not applicable', 'skipped']:
-                        logger().log_not_applicable(mod)
+                    print_dictionary[result](mod)
         logger().log('[CHIPSEC] *****************************************************************')
+
+    def order_summary(self) -> Dict[str, List[TestCase]]:
+        self.summary = True
+        ret = OrderedDict()
+        ret['failed to run'] = []
+        ret['passed'] = []
+        ret['information'] = []
+        ret['failed'] = []
+        ret['warnings'] = []
+        ret['not applicable'] = []
+        destination = {'Passed': 'passed',
+                       'Failed': 'failed',
+                       'Error': 'failed to run',
+                       'Warning': 'warnings',
+                       'Information': 'information',
+                       'NotApplicable': 'not applicable'
+                       }
+        executed = 0
+        for test in self.test_cases:
+            executed += 1
+            fields = test.get_fields()
+            ret[destination[fields['result']]].append(fields['name'])
+        ret['total'] = executed
+        ret['exceptions'] = self.exceptions
+        return ret
+
+    def get_return_code(self) -> int:
+        summary = self.order_summary()
+        destination = {
+                        'failed to run': ExitCode.ERROR,
+                        'exceptions': ExitCode.EXCEPTION,
+                        'failed': ExitCode.FAIL,
+                        'warnings': ExitCode.WARNING,
+                        'not applicable': ExitCode.NOTAPPLICABLE,
+                        'information': ExitCode.INFORMATION
+                        }
+        for result in destination.keys():
+            if len(summary[result]) != 0:
+                return destination[result]
+        return ExitCode.OK
+        
+class ReturnCodeResults(ChipsecResults):
+    def print_summary(self, runtime: Optional[float] = None) -> None:
+        summary = self.order_summary()
+        filler = '*' * 27
+        logger().log(f'\n[CHIPSEC] {filler}  SUMMARY  {filler}')
+        if runtime is not None:
+            logger().log(f'[CHIPSEC] Time elapsed            {runtime:.3f}')
+
+        for result in summary.keys():
+            if result == 'total':
+                logger().log(f'[CHIPSEC] Modules {result:16}{summary[result]:d}')
+            elif result == 'exceptions':
+                if len(summary[result]) > 0:
+                    logger().log(f'[CHIPSEC] Modules with {result:11}{len(summary[result]):d}:')
+                    for mod in summary[result]:
+                        logger().log_error(mod)
+            else:
+                logger().log(f'[CHIPSEC] Modules {result:16}{len(summary[result]):d}:')
+                for mod in summary[result]:
+                    logger().log(f"    {mod}")
+        logger().log('[CHIPSEC] *****************************************************************')
+
+    def order_summary(self):
+        if self.time is None:
+            self.set_time()
+        self.summary = True
+        ret = OrderedDict()
+        passed = []
+        failed = []
+        executed = 0
+        for test in self.test_cases:
+            executed += 1
+            fields = test.get_fields()
+            if fields['result'] == 'Passed':
+                passed.append(fields['name'])
+            elif fields['result'] == 'Failed':
+                failed.append(fields['name'])
+        ret['total'] = executed
+        ret['failed'] = failed
+        ret['passed'] = passed
+        ret['exceptions'] = self.exceptions
+        return ret
+
+    def get_return_code(self):
+        summary = self.order_summary()
+        if len(self.test_cases) == 1:
+            return self.test_cases[0].result_code
+        elif len(summary['failed']) != 0:
+            return ExitCode.FAIL
+        else:
+            return ExitCode.OK

@@ -17,9 +17,11 @@
 
 import struct
 
-from chipsec.helper import oshelper
 from chipsec.helper.basehelper import Helper
-from chipsec.exceptions import UnimplementedAPIError
+from chipsec.library.exceptions import UnimplementedAPIError
+from typing import Optional, TYPE_CHECKING
+if TYPE_CHECKING:
+    from ctypes import Array
 
 
 class TestHelper(Helper):
@@ -38,17 +40,20 @@ class TestHelper(Helper):
         self.driver_loaded = True
         self.name = "TestHelper"
 
-    def create(self, start_driver):
+    def create(self):
         return True
 
-    def delete(self, start_driver):
+    def delete(self):
         return True
 
-    def start(self, start_driver, driver_exists=False, tofile=None, fromfile=None):
+    def start(self):
         return True
 
-    def stop(self, start_driver):
+    def stop(self):
         return True
+
+    def _generate_size_ffs(self, size: int) -> int:
+        return ~(~0xFF << (size-1) * 8)
 
      # This will be used to probe the device, fake a Broadwell CPU
     def read_pci_reg(self, bus, device, function, address, size):
@@ -67,16 +72,116 @@ class TestHelper(Helper):
             else:
                 return 0x9D438086
         else:
-            raise Exception("Unexpected PCI read")
-
-    def read_physical_mem(self, phys_address, length):
-        return self.read_phys_mem(phys_address >> 32, phys_address & 0xFFFFFFFF, length)
+            return self._generate_size_ffs(size)
 
     def get_threads_count(self):
         return 2
 
     def cpuid(self, eax, ecx):
         return 0x406F1, 0, 0, 0
+
+    def write_pci_reg(self, bus, device, function, address, value, size):
+        raise UnimplementedAPIError('write_pci_reg')
+
+    def get_info(self):
+        return self.name, self.driverpath
+
+    def read_mmio_reg(self, phys_address, size):
+        raise UnimplementedAPIError('read_mmio_reg')
+
+    def write_mmio_reg(self, phys_address, size, value):
+        raise UnimplementedAPIError('write_mmio_reg')
+
+    def read_phys_mem(self, phys_address, length):
+        raise UnimplementedAPIError('read_phys_mem')
+
+    def write_phys_mem(self, phys_address, length, buf):
+        raise UnimplementedAPIError('write_phys_mem')
+
+    def alloc_phys_mem(self, length, max_phys_address):
+        raise UnimplementedAPIError('alloc_phys_mem')
+
+    def free_phys_mem(self, physical_address):
+        raise UnimplementedAPIError('free_phys_mem')
+
+    def va2pa(self, va):
+        raise UnimplementedAPIError('va2pa')
+
+    def map_io_space(self, physical_address, length, cache_type):
+        raise UnimplementedAPIError('map_io_space')
+
+    def read_io_port(self, io_port, size):
+        raise UnimplementedAPIError('read_io_port')
+
+    def write_io_port(self, io_port, value, size):
+        raise UnimplementedAPIError('write_io_port')
+
+    def read_cr(self, cpu_thread_id, cr_number):
+        raise UnimplementedAPIError('read_cr')
+
+    def write_cr(self, cpu_thread_id, cr_number, value):
+        raise UnimplementedAPIError('write_cr')
+
+    def read_msr(self, cpu_thread_id, msr_addr):
+        raise UnimplementedAPIError('read_msr')
+
+    def write_msr(self, cpu_thread_id, msr_addr, eax, edx):
+        raise UnimplementedAPIError('write_msr')
+
+    def load_ucode_update(self, cpu_thread_id, ucode_update_buf):
+        raise UnimplementedAPIError('load_ucode_update')
+
+    def get_descriptor_table(self, cpu_thread_id, desc_table_code):
+        raise UnimplementedAPIError('get_descriptor_table')
+
+    def EFI_supported(self):
+        raise UnimplementedAPIError('EFI_supported')
+
+    def get_EFI_variable(self, name, guid):
+        raise UnimplementedAPIError('get_EFI_variable')
+
+    def set_EFI_variable(self, name, guid, buffer, buffer_size, attrs):
+        raise UnimplementedAPIError('set_EFI_variable')
+
+    def delete_EFI_variable(self, name, guid):
+        raise UnimplementedAPIError('delete_EFI_variable')
+
+    def list_EFI_variables(self):
+        raise UnimplementedAPIError('list_EFI_variables')
+
+    def get_ACPI_table(self, table_name: str) -> Optional['Array']:
+        raise UnimplementedAPIError('get_ACPI_table')
+    
+    def enum_ACPI_tables(self) -> Optional['Array']:
+        raise UnimplementedAPIError('enum_ACPI_table')
+
+    def msgbus_send_read_message(self, mcr, mcrx):
+        raise UnimplementedAPIError('msgbus_send_read_message')
+
+    def msgbus_send_write_message(self, mcr, mcrx, mdr):
+        raise UnimplementedAPIError('msgbus_send_write_message')
+
+    def msgbus_send_message(self, mcr, mcrx, mdr):
+        raise UnimplementedAPIError('msgbus_send_message')
+
+    def get_affinity(self):
+        raise UnimplementedAPIError('get_affinity')
+
+    def set_affinity(self, value):
+        raise UnimplementedAPIError('set_affinity')
+
+    def send_sw_smi(self, cpu_thread_id, SMI_code_data, _rax, _rbx, _rcx, _rdx, _rsi, _rdi):
+        raise UnimplementedAPIError('send_sw_smi')
+
+    def hypercall(self, rcx, rdx, r8, r9, r10, r11, rax, rbx, rdi, rsi, xmm_buffer):
+        raise UnimplementedAPIError('hypercall')
+
+    def getcwd(self):
+        raise UnimplementedAPIError('getcwd')
+
+    def retpoline_enabled(self) -> bool:
+        return False
+
 
 
 class ACPIHelper(TestHelper):
@@ -170,7 +275,8 @@ class ACPIHelper(TestHelper):
         self.rsdt_descriptor = self._create_rsdt()
         self.xsdt_descriptor = self._create_xsdt()
 
-    def read_phys_mem(self, pa_hi, pa_lo, length):
+    def read_phys_mem(self, pa, length):
+        pa_lo = pa & 0xFFFFFFFF
         if pa_lo == 0x40E:
             return struct.pack("<H", self.EBDA_ADDRESS >> 4)
         elif (pa_lo >= self.EBDA_ADDRESS and
@@ -227,12 +333,13 @@ class DSDTParsingHelper(ACPIHelper):
         self._add_fadt_to_sdt_entries()
         self.fadt_descriptor = self._create_fadt()
 
-    def read_phys_mem(self, pa_hi, pa_lo, length):
+    def read_phys_mem(self, pa, length):
+        pa_lo = pa & 0xFFFFFFFF
         if pa_lo == self.FADT_ADDRESS:
             return self.fadt_descriptor[:length]
         else:
             parent = super(DSDTParsingHelper, self)
-            return parent.read_phys_mem(pa_hi, pa_lo, length)
+            return parent.read_phys_mem(pa, length)
 
 
 class SPIHelper(TestHelper):
@@ -258,10 +365,7 @@ class SPIHelper(TestHelper):
                 return 0xDEADBEEF
             elif address == 0x0:
                 return 0xAAAA8086
-            else:
-                raise Exception("Unexpected PCI read")
-        else:
-            return super(SPIHelper, self).read_pci_reg(bus, device,
+        return super(SPIHelper, self).read_pci_reg(bus, device,
                                                        function,
                                                        address, size)
 
@@ -304,7 +408,7 @@ class ValidChipsetHelper(TestHelper):
             else:
                 return 0x9D438086
         else:
-            raise Exception("Unexpected PCI read")
+            return self._generate_size_ffs(size)
 
 
 class InvalidChipsetHelper(TestHelper):
@@ -324,7 +428,7 @@ class InvalidChipsetHelper(TestHelper):
             else:
                 return 0x9D438086
         else:
-            raise Exception("Unexpected PCI read")
+            return self._generate_size_ffs(size)
 
     def cpuid(self, eax, ecx):
         return 0xfffff, 0, 0, 0
@@ -346,4 +450,4 @@ class InvalidPchHelper(TestHelper):
             else:
                 return 0xBEEF8086
         else:
-            raise Exception("Unexpected PCI read")
+            return self._generate_size_ffs(size)

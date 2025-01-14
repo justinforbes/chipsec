@@ -29,17 +29,18 @@ Examples:
 >>> chipsec_util cmos writeh 0x0 0xCC
 """
 
-from time import time
 from argparse import ArgumentParser
 
-from chipsec.command import BaseCommand
+from chipsec.command import BaseCommand, toLoad
 from chipsec.hal.cmos import CMOS
-from chipsec.exceptions import CmosRuntimeError
 
 
 class CMOSCommand(BaseCommand):
 
-    def requires_driver(self):
+    def requirements(self) -> toLoad:
+        return toLoad.Driver
+
+    def parse_arguments(self) -> None:
         parser = ArgumentParser(usage=__doc__)
 
         parser_offset = ArgumentParser(add_help=False)
@@ -66,40 +67,29 @@ class CMOSCommand(BaseCommand):
         parser_writeh = subparsers.add_parser('writeh', parents=[parser_offset, parser_val])
         parser_writeh.set_defaults(func=self.cmos_writeh)
 
-        parser.parse_args(self.argv[2:], namespace=CMOSCommand)
+        parser.parse_args(self.argv, namespace=CMOSCommand)
 
-        return True
+    def set_up(self) -> None:
+        self._cmos = CMOS(self.cs)
 
-    def cmos_dump(self):
+    def cmos_dump(self) -> None:
         self.logger.log("[CHIPSEC] Dumping CMOS memory..")
         self._cmos.dump()
 
-    def cmos_readl(self):
+    def cmos_readl(self) -> None:
         val = self._cmos.read_cmos_low(self.offset)
-        self.logger.log("[CHIPSEC] CMOS low byte 0x%X = 0x%X" % (self.offset, val))
+        self.logger.log(f'[CHIPSEC] CMOS low byte 0x{self.offset:X} = 0x{val:X}')
 
-    def cmos_writel(self):
+    def cmos_writel(self) -> None:
         val = self._cmos.write_cmos_low(self.offset, self.value)
-        self.logger.log("[CHIPSEC] CMOS low byte 0x%X = 0x%X" % (self.offset, self.value))
+        self.logger.log(f'[CHIPSEC] CMOS low byte 0x{self.offset:X} = 0x{self.value:X}')
 
-    def cmos_readh(self):
+    def cmos_readh(self) -> None:
         val = self._cmos.read_cmos_high(self.offset)
-        self.logger.log("[CHIPSEC] CMOS high byte 0x%X = 0x%X" % (self.offset, val))
+        self.logger.log(f'[CHIPSEC] CMOS high byte 0x{self.offset:X} = 0x{val:X}')
 
-    def cmos_writeh(self):
-        self.logger.log("[CHIPSEC] Writing CMOS high byte 0x%X <- 0x%X " % (self.offset, self.value))
+    def cmos_writeh(self) -> None:
+        self.logger.log(f'[CHIPSEC] Writing CMOS high byte 0x{self.offset:X} <- 0x{self.value:X}')
         self._cmos.write_cmos_high(self.offset, self.value)
-
-    def run(self):
-        t = time()
-        try:
-            self._cmos = CMOS(self.cs)
-        except CmosRuntimeError as msg:
-            print(msg)
-            return
-
-        self.func()
-        self.logger.log("[CHIPSEC] (cmos) time elapsed {:.3f}".format(time() - t))
-
 
 commands = {'cmos': CMOSCommand}

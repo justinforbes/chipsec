@@ -7,7 +7,7 @@
   <!-- Information                          -->
   <!--                                      -->
   <!-- #################################### -->
-  <info family="core" detection_value="A0652, A0653, A0655, A0660, A0661">
+  <info family="core" detection_value="0xA0652, 0xA0653, 0xA0655, 0xA0660, 0xA0661">
     <sku did="0x3E20" name="CometLake" code="CML" longname="CometLake H8 Core / XeonW" />
     <sku did="0x3E33" name="CometLake" code="CML" longname="CometLake v1 U6 Core" />
     <sku did="0x3E34" name="CometLake" code="CML" longname="CometLake v1 U4 Core" />
@@ -98,7 +98,7 @@
     <!-- MSR_SMM_FEATURE_CONTROL -->
     <register name="MSR_SMM_FEATURE_CONTROL" type="msr" msr="0x4E0" desc="Enhanced SMM Feature Control">
       <field name="LOCK"            bit="0" size="1"  desc="Lock bit" />
-      <field name="SMM_Code_Chk_En" bit="2" size="1"  desc="Prevents SMM from executing code outside the ranges defined by the SMRR" />
+      <field name="SMM_CODE_CHK_EN" bit="2" size="1"  desc="Prevents SMM from executing code outside the ranges defined by the SMRR" />
     </register>
 
     <!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->

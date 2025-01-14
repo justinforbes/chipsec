@@ -22,31 +22,32 @@
 """
 The msr command allows direct access to read and write MSRs.
 
->>> chipsec_util msr <msr> [eax] [edx] [cpu_id]
+>>> chipsec_util msr <msr> [eax] [edx] [thread_id]
 
 Examples:
 
 >>> chipsec_util msr 0x3A
->>> chipsec_util msr 0x3A 0
->>> chipsec_util msr 0x8B 0x0 0x0 0
+>>> chipsec_util msr 0x3A 0x0
+>>> chipsec_util msr 0x8B 0x0 0x0 0x0
 """
 
-from chipsec.command import BaseCommand
-from chipsec.hal.msr import Msr
+from chipsec.command import BaseCommand, toLoad
 from argparse import ArgumentParser
 
 
 # CPU Model Specific Registers
 class MSRCommand(BaseCommand):
 
-    def requires_driver(self):
+    def requirements(self) -> toLoad:
+        return toLoad.Driver
+
+    def parse_arguments(self) -> None:
         parser = ArgumentParser(prog='chipsec_util msr', usage=__doc__)
-        parser.add_argument('msr_addr', type=lambda x: int(x, 16), metavar='<msr>', help='MSR address (hex)')
-        parser.add_argument('msr_input1', type=lambda x: int(x, 16), metavar='MSR Value', nargs='?', default=None, help='EAX (hex)')
-        parser.add_argument('msr_input2', type=lambda x: int(x, 16), metavar='MSR Value', nargs='?', default=None, help='EDX (hex)')
-        parser.add_argument('cpu_id', type=lambda x: int(x, 16), metavar='CPU ID', nargs='?', default=None, help='CPU ID (hex)')
-        parser.parse_args(self.argv[2:], namespace=self)
-        return True
+        parser.add_argument('msr_addr', type=lambda x: int(x, 0), metavar='<msr>', help='MSR address')
+        parser.add_argument('msr_input1', type=lambda x: int(x, 0), metavar='MSR Value', nargs='?', default=None, help='EAX (Low)')
+        parser.add_argument('msr_input2', type=lambda x: int(x, 0), metavar='MSR Value', nargs='?', default=None, help='EDX (High)')
+        parser.add_argument('thread_id', type=lambda x: int(x, 0), metavar='Thread ID', nargs='?', default=None, help='Thread ID')
+        parser.parse_args(self.argv, namespace=self)
 
     def run(self):
         if self.msr_input1 is None:
@@ -63,12 +64,12 @@ class MSRCommand(BaseCommand):
             eax = self.msr_input1
             edx = self.msr_input2
             val64 = ((edx << 32) | eax)
-            if self.cpu_id is None:
+            if self.thread_id is None:
                 self.logger.log("[CHIPSEC] All CPUs: WRMSR( 0x{:x} ) = {:016X}".format(self.msr_addr, val64))
                 for tid in range(self.cs.msr.get_cpu_thread_count()):
                     self.cs.msr.write_msr(tid, self.msr_addr, eax, edx)
             else:
-                cpu_thread_id = self.cpu_id
+                cpu_thread_id = self.thread_id
                 self.logger.log("[CHIPSEC] CPU{:d}: WRMSR( 0x{:x} ) = {:016X}".format(cpu_thread_id, self.msr_addr, val64))
                 self.cs.msr.write_msr(cpu_thread_id, self.msr_addr, eax, edx)
 

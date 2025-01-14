@@ -38,7 +38,10 @@ Registers used:
 
 """
 
-from chipsec.module_common import BaseModule, ModuleResult, MTAG_BIOS
+from chipsec.library.exceptions import CSReadError
+from chipsec.module_common import BaseModule, MTAG_BIOS
+from chipsec.library.returncode import ModuleResult
+from typing import List
 TAGS = [MTAG_BIOS]
 
 
@@ -46,42 +49,48 @@ class bios_ts(BaseModule):
     def __init__(self):
         BaseModule.__init__(self)
 
-    def is_supported(self):
-        if self.cs.is_control_defined('BiosInterfaceLockDown'):
+    def is_supported(self) -> bool:
+        if self.cs.control.is_defined('BiosInterfaceLockDown'):
             return True
         self.logger.log_important('BiosInterfaceLockDown control not defined for platform.  Skipping module.')
-        self.res = ModuleResult.NOTAPPLICABLE
         return False
 
-    def check_bios_iface_lock(self):
-        bild = self.cs.get_control('BiosInterfaceLockDown')
-        self.logger.log("[*] BiosInterfaceLockDown (BILD) control = {:d}".format(bild))
+    def check_bios_iface_lock(self) -> int:
+        bild = self.cs.control.get('BiosInterfaceLockDown')
+        self.logger.log(f'[*] BiosInterfaceLockDown (BILD) control = {bild:d}')
 
-        if self.cs.is_control_defined('TopSwapStatus'):
-            if self.cs.is_control_all_ffs('TopSwapStatus'):
-                self.logger.log("[*] BIOS Top Swap mode: can't determine status.")
+        if self.cs.control.is_defined('TopSwapStatus'):
+            if self.cs.control.is_all_ffs('TopSwapStatus'):
+                self.logger.log('[*] BIOS Top Swap mode: cannot determine status.')
                 self.logger.log_verbose('TopSwapStatus read returned all 0xFs.')
             else:
-                tss = self.cs.get_control('TopSwapStatus')
-                self.logger.log("[*] BIOS Top Swap mode is {} (TSS = {:d})".format('enabled' if (1 == tss) else 'disabled', tss))
+                tss = self.cs.control.get('TopSwapStatus')
+                self.logger.log(f"[*] BIOS Top Swap mode is {'enabled' if (1 == tss) else 'disabled'} (TSS = {tss:d})")
 
-        if self.cs.is_control_defined('TopSwap'):
-            if self.cs.is_control_all_ffs('TopSwap'):
-                self.logger.log("[*] RTC Top Swap control (TS): can't determine status.")
+        if self.cs.control.is_defined('TopSwap'):
+            if self.cs.control.is_all_ffs('TopSwap'):
+                self.logger.log('[*] RTC Top Swap control (TS): cannot determine status.')
                 self.logger.log_verbose('TopSwap read returned all 0xFs.')
             else:
-                ts = self.cs.get_control('TopSwap')
-                self.logger.log("[*] RTC TopSwap control (TS) = {:x}".format(ts))
+                ts = self.cs.control.get('TopSwap')
+                self.logger.log(f'[*] RTC TopSwap control (TS) = {ts:x}')
 
         if bild == 0:
             res = ModuleResult.FAILED
-            self.logger.log_failed("BIOS Interface is not locked (including Top Swap Mode)")
+            self.result.setStatusBit(self.result.status.LOCKS)
+            self.logger.log_failed('BIOS Interface is not locked (including Top Swap Mode)')
         else:
             res = ModuleResult.PASSED
-            self.logger.log_passed("BIOS Interface is locked (including Top Swap Mode)")
-        return res
+            self.logger.log_passed('BIOS Interface is locked (including Top Swap Mode)')
 
-    def run(self, module_argv):
-        self.logger.start_test("BIOS Interface Lock (including Top Swap Mode)")
-        self.res = self.check_bios_iface_lock()
+        return self.result.getReturnCode(res)
+
+    def run(self, module_argv: List[str]) -> int:
+        self.logger.start_test('BIOS Interface Lock (including Top Swap Mode)')
+        try:
+            self.res = self.check_bios_iface_lock()
+        except CSReadError as err:
+            self.logger.log_warning(f'Unable to read register: {err}')
+            self.result.setStatusBit(self.result.status.VERIFY)
+            self.res = self.result.getReturnCode(ModuleResult.WARNING)
         return self.res

@@ -41,8 +41,10 @@ Registers used:
 
 """
 
-from chipsec.module_common import BaseModule, ModuleResult
-from chipsec.exceptions import HWAccessViolationError
+from chipsec.module_common import BaseModule
+from chipsec.library.returncode import ModuleResult
+from chipsec.library.exceptions import HWAccessViolationError
+from typing import List
 
 _MODULE_NAME = 'memlock'
 
@@ -53,51 +55,53 @@ class memlock(BaseModule):
         BaseModule.__init__(self)
         self.is_read_error = False
 
-    def is_supported(self):
+    def is_supported(self) -> bool:
         # Workaround for Atom based processors.  Accessing this MSR on these systems
         # causes a GP fault and can't be caught in UEFI Shell.
         if not self.cs.is_atom():
-            if self.cs.register_has_field('MSR_LT_LOCK_MEMORY', 'LT_LOCK'):
+            if self.cs.register.has_field('MSR_LT_LOCK_MEMORY', 'LT_LOCK'):
                 return True
             else:
                 self.logger.log_important("'MSR_LT_LOCK_MEMORY.LT_LOCK' not defined for platform.  Skipping module.")
         else:
             self.logger.log_important('Found an Atom based platform.  Skipping module.')
-        self.res = ModuleResult.NOTAPPLICABLE
         return False
 
-    def check_MSR_LT_LOCK_MEMORY(self):
+    def check_MSR_LT_LOCK_MEMORY(self) -> bool:
         self.logger.log('[*] Checking MSR_LT_LOCK_MEMORY status')
         status = False
         for tid in range(self.cs.msr.get_cpu_thread_count()):
             lt_lock_msr = 0
             try:
-                lt_lock_msr = self.cs.read_register('MSR_LT_LOCK_MEMORY', tid)
+                lt_lock_msr = self.cs.register.read('MSR_LT_LOCK_MEMORY', tid)
             except HWAccessViolationError:
                 self.logger.log_important('Could not read MSR_LT_LOCK_MEMORY')
                 self.is_read_error = True
                 break
             if self.logger.VERBOSE:
-                self.cs.print_register('MSR_LT_LOCK_MEMORY', lt_lock_msr)
-            lt_lock = self.cs.get_register_field('MSR_LT_LOCK_MEMORY', lt_lock_msr, 'LT_LOCK')
-            self.logger.log("[*]   cpu{:d}: MSR_LT_LOCK_MEMORY[LT_LOCK] = {:x}".format(tid, lt_lock))
+                self.cs.register.print('MSR_LT_LOCK_MEMORY', lt_lock_msr)
+            lt_lock = self.cs.register.get_field('MSR_LT_LOCK_MEMORY', lt_lock_msr, 'LT_LOCK')
+            self.logger.log(f'[*]   cpu{tid:d}: MSR_LT_LOCK_MEMORY[LT_LOCK] = {lt_lock:x}')
             if 0 == lt_lock:
                 status = True
         return status
 
-    def run(self, module_argv):
-        self.logger.start_test("Check MSR_LT_LOCK_MEMORY")
+    def run(self, module_argv: List[str]) -> int:
+        self.logger.start_test('Check MSR_LT_LOCK_MEMORY')
         check_MSR_LT_LOCK_MEMORY_test_fail = self.check_MSR_LT_LOCK_MEMORY()
 
         if self.is_read_error:
             self.logger.log_error('There was a problem reading MSR_LT_LOCK_MEMORY.')
             self.logger.log_important('Possible the environment or a platform feature is preventing these reads.')
             self.res = ModuleResult.ERROR
-        elif check_MSR_LT_LOCK_MEMORY_test_fail == True:
-            self.logger.log_failed("MSR_LT_LOCK_MEMORY.LT_LOCK bit is not configured correctly")
+            self.result.setStatusBit(self.result.status.ACCESS_RW)
+        elif check_MSR_LT_LOCK_MEMORY_test_fail is True:
+            self.logger.log_failed('MSR_LT_LOCK_MEMORY.LT_LOCK bit is not configured correctly')
             self.res = ModuleResult.FAILED
+            self.result.setStatusBit(self.result.status.LOCKS)
         else:
             self.logger.log_passed('MSR_LT_LOCK_MEMORY.LT_LOCK bit is set')
             self.res = ModuleResult.PASSED
 
-        return self.res
+        return self.result.getReturnCode(self.res)
+

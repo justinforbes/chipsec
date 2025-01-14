@@ -30,9 +30,9 @@ usage:
 """
 from typing import Tuple, List
 from chipsec.hal import hal_base
-from chipsec.logger import logger
-from chipsec.exceptions import IOBARNotFoundError
-from chipsec.exceptions import CSReadError
+from chipsec.library.logger import logger
+from chipsec.library.exceptions import IOBARNotFoundError
+from chipsec.library.exceptions import CSReadError
 
 DEFAULT_IO_BAR_SIZE = 0x100
 
@@ -67,37 +67,37 @@ class IOBAR(hal_base.HALBase):
             if 'base_field' in bar:
                 base_field = bar['base_field']
                 try:
-                    base = self.cs.read_register_field(bar_reg, base_field, preserve_field_position=True)
+                    base = self.cs.register.read_field(bar_reg, base_field, preserve_field_position=True)
                 except Exception:
                     base = 0
                 try:
-                    empty_base = self.cs.get_register_field_mask(bar_reg, base_field, preserve_field_position=True)
+                    empty_base = self.cs.register.get_field_mask(bar_reg, base_field, preserve_field_position=True)
                 except Exception:
                     empty_base = 0
             else:
                 try:
-                    base = self.cs.read_register(bar_reg)
+                    base = self.cs.register.read(bar_reg)
                 except Exception:
                     base = 0
                 try:
-                    empty_base = self.cs.get_register_field_mask(bar_reg, preserve_field_position=True)
+                    empty_base = self.cs.register.get_field_mask(bar_reg, preserve_field_position=True)
                 except Exception:
                     empty_base = 0
         else:
             # this method is not preferred
-            base = self.cs.pci.read_word(int(bar['bus'], 16), int(bar['dev'], 16), int(bar['fun'], 16), int(bar['reg'], 16))
+            base = self.cs.pci.read_word(self.cs.device.get_first_bus(bar), bar['dev'], bar['fun'], bar['reg'])
             empty_base = 0xFFFF
 
         if 'fixed_address' in bar and (base == empty_base or base == 0):
-            base = int(bar['fixed_address'], 16)
+            base = bar['fixed_address']
             if logger().HAL:
                 logger().log(f'[iobar] Using fixed address for {bar_name}: 0x{base:016X}')
 
         if 'mask' in bar:
-            base = base & int(bar['mask'], 16)
+            base = base & bar['mask']
         if 'offset' in bar:
-            base = base + int(bar['offset'], 16)
-        size = int(bar['size'], 16) if ('size' in bar) else DEFAULT_IO_BAR_SIZE
+            base = base + bar['offset']
+        size = bar['size'] if ('size' in bar) else DEFAULT_IO_BAR_SIZE
 
         if logger().HAL:
             logger().log(f'[iobar] {bar_name}: 0x{base:04X} (size = 0x{size:X})')
@@ -140,7 +140,7 @@ class IOBAR(hal_base.HALBase):
             bar_reg = bar['register']
             if 'enable_field' in bar:
                 bar_en_field = bar['enable_field']
-                is_enabled = (1 == self.cs.read_register_field(bar_reg, bar_en_field))
+                is_enabled = (1 == self.cs.register.read_field(bar_reg, bar_en_field))
         return is_enabled
 
     def list_IO_BARs(self) -> None:
@@ -152,22 +152,34 @@ class IOBAR(hal_base.HALBase):
             if not self.is_IO_BAR_defined(_bar_name):
                 continue
             _bar = self.cs.Cfg.IO_BARS[_bar_name]
-            try:
-                (_base, _size) = self.get_IO_BAR_base_address(_bar_name)
-            except CSReadError:
-                if self.logger.HAL:
-                    self.logger.log(f"Unable to find IO BAR {_bar_name}")
-                continue
-            _en = self.is_IO_BAR_enabled(_bar_name)
-
+            bus_data = []
             if 'register' in _bar:
-                _s = _bar['register']
-                if 'offset' in _bar:
-                    _s += (f' + 0x{int(_bar["offset"], 16):X}')
+                bus_data = self.cs.register.get_bus(_bar['register'])
+                if not bus_data:
+                    if 'bus' in self.cs.register.get_def(_bar['register']):
+                        bus_data = [self.cs.register.get_def(_bar['register'])['bus']]
+            elif 'bus' in _bar:
+                bus_data.extend(_bar['bus'])
             else:
-                _s = f'{int(_bar["bus"], 16):02X}:{int(_bar["dev"], 16):02X}.{int(_bar["fun"], 16):01X} + {_bar["reg"]}'
+                continue
 
-            logger().log(f' {_bar_name:12} | {_s:14} | {_base:016X} | {_size:08X} | {_en:d}   | {_bar["desc"]}')
+            for bus in bus_data:
+                try:
+                    (_base, _size) = self.get_IO_BAR_base_address(_bar_name)
+                except CSReadError:
+                    if self.logger.HAL:
+                        self.logger.log(f"Unable to find IO BAR {_bar_name}")
+                    continue
+                _en = self.is_IO_BAR_enabled(_bar_name)
+
+                if 'register' in _bar:
+                    _s = _bar['register']
+                    if 'offset' in _bar:
+                        _s += (f' + 0x{_bar["offset"]:X}')
+                else:
+                    _s = f'{bus:02X}:{_bar["dev"]:02X}.{_bar["fun"]:01X} + {_bar["reg"]}'
+
+                logger().log(f' {_bar_name:12} | {_s:14} | {_base:016X} | {_size:08X} | {_en:d}   | {_bar["desc"]}')
 
     #
     # Read I/O range by I/O BAR name

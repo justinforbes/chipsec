@@ -61,9 +61,13 @@ Registers used:
 
 """
 
-_MODULE_NAME = 'sgx_check'
-from chipsec.module_common import BaseModule, ModuleResult, MTAG_HWCONFIG
-from chipsec.defines import BIT0, BIT1, BIT2, BIT5, BIT6, BIT7, BIT8
+from typing import Tuple
+from chipsec.library.exceptions import HWAccessViolationError
+from chipsec.module_common import BaseModule, MTAG_HWCONFIG
+from chipsec.library.returncode import ModuleResult
+from chipsec.library.defines import BIT0, BIT1, BIT2, BIT5, BIT6, BIT7, BIT8
+from chipsec.modules.common.sgx_check_sidekick import SGX_Check_Sidekick
+
 TAGS = [MTAG_HWCONFIG]
 
 
@@ -73,306 +77,353 @@ class sgx_check(BaseModule):
         self.helper = self.cs.helper
         self.res = ModuleResult.PASSED
 
-    def is_supported(self):
+    def is_supported(self) -> bool:
         sgx_cpu_support = False
-        if self.cs.helper.is_efi():
+        if self.cs.os_helper.is_efi():
             self.logger.log_important('Currently this module cannot run within the EFI Shell. Exiting.')
-        elif not self.cs.register_has_field('IA32_FEATURE_CONTROL', 'SGX_GLOBAL_EN'):
+        elif not self.cs.register.has_field('IA32_FEATURE_CONTROL', 'SGX_GLOBAL_EN'):
             self.logger.log_important('IA32_FEATURE_CONTROL.SGX_GLOBAL_EN not defined for platform.  Skipping module.')
         else:
             for tid in range(self.cs.msr.get_cpu_thread_count()):
                 status = self.helper.set_affinity(tid)
                 if status == -1:
-                    self.logger.log_verbose("[*] Failed to set affinity to CPU{:d}".format(tid))
+                    self.logger.log_verbose(f'[*] Failed to set affinity to CPU{tid:d}')
                 (_, r_ebx, _, _) = self.cs.cpu.cpuid(0x07, 0x00)
                 if r_ebx & BIT2:
-                    self.logger.log_verbose("[*] CPU{:d}: does support SGX".format(tid))
+                    self.logger.log_verbose(f'[*] CPU{tid:d}: does support SGX')
                     sgx_cpu_support = True
                 else:
-                    self.logger.log_verbose("[*]CPU{:d}: does not support SGX".format(tid))
+                    self.logger.log_verbose(f'[*]CPU{tid:d}: does not support SGX')
                     self.logger.log_important('SGX not supported.  Skipping module.')
-        if not sgx_cpu_support:
-            self.res = ModuleResult.NOTAPPLICABLE
+
         return sgx_cpu_support
 
-    def check_sgx_config(self):
-        self.logger.log("[*] Test if CPU has support for SGX")
+    def check_sgx_config(self) -> int:
+        self.logger.log('[*] Test if CPU has support for SGX')
         sgx_ok = False
 
-        self.logger.log("\n[*] SGX BIOS enablement check")
-        self.logger.log("[*] Verifying IA32_FEATURE_CONTROL MSR is configured")
+        self.logger.log('\n[*] SGX BIOS enablement check')
+        self.logger.log('[*] Verifying IA32_FEATURE_CONTROL MSR is configured')
         bios_feature_control_enable = True
         for tid in range(self.cs.msr.get_cpu_thread_count()):
-            if not (self.cs.read_register_field('IA32_FEATURE_CONTROL', 'SGX_GLOBAL_EN', False, tid) == 1):
+            if not (self.cs.register.read_field('IA32_FEATURE_CONTROL', 'SGX_GLOBAL_EN', False, tid) == 1):
                 bios_feature_control_enable = False
         if bios_feature_control_enable:
-            self.logger.log_good("Intel SGX is Enabled in BIOS")
+            self.logger.log_good('Intel SGX is Enabled in BIOS')
         else:
-            self.logger.log_important("Intel SGX is not enabled in BIOS")
+            self.logger.log_important('Intel SGX is not enabled in BIOS')
             self.res = ModuleResult.WARNING
+            self.result.setStatusBit(self.result.status.FEATURE_DISABLED)
 
-        self.logger.log("\n[*] Verifying IA32_FEATURE_CONTROL MSR is locked")
+        self.logger.log('\n[*] Verifying IA32_FEATURE_CONTROL MSR is locked')
         locked = True
         for tid in range(self.cs.msr.get_cpu_thread_count()):
-            feature_cntl_lock = self.cs.get_control('Ia32FeatureControlLock', tid)
-            self.logger.log_verbose("[*] cpu{:d}: IA32_Feature_Control Lock = {:d}".format(tid, feature_cntl_lock))
+            feature_cntl_lock = self.cs.control.get('Ia32FeatureControlLock', tid)
+            self.logger.log_verbose(f'[*] cpu{tid:d}: IA32_Feature_Control Lock = {feature_cntl_lock:d}')
             if 0 == feature_cntl_lock:
                 locked = False
         if locked:
-            self.logger.log_good("IA32_Feature_Control locked")
+            self.logger.log_good('IA32_Feature_Control locked')
         else:
-            self.logger.log_bad("IA32_Feature_Control is unlocked")
+            self.logger.log_bad('IA32_Feature_Control is unlocked')
             self.res = ModuleResult.FAILED
+            self.result.setStatusBit(self.result.status.LOCKS)
 
-        # Verify that Protected Memory Range (PRM) is supported, MSR IA32_MTRRCAP (FEh) [12]=1
-        # Check on every CPU and make sure that they are all the same values
-        self.logger.log("\n[*] Verifying if Protected Memory Range (PRMRR) is configured")
+        self.logger.log('\n[*] Verifying if Protected Memory Range (PRMRR) is configured')
         prmrr_enable = False
         for tid in range(self.cs.msr.get_cpu_thread_count()):
-            mtrrcap = self.cs.read_register_field('MTRRCAP', 'PRMRR', False, tid)
+            mtrrcap = self.cs.register.read_field('MTRRCAP', 'PRMRR', False, tid)
             if mtrrcap == 0:
-                self.logger.log_verbose("[*] CPU{:d} Protected Memory Range configuration is not supported".format(tid))
+                self.logger.log_verbose(f'[*] CPU{tid:d} Protected Memory Range configuration is not supported')
             else:
                 prmrr_enable = True
-                self.logger.log_verbose("[*] CPU{:d} Protected Memory Range configuration is supported".format(tid))
+                self.logger.log_verbose(f'[*] CPU{tid:d} Protected Memory Range configuration is supported')
         if prmrr_enable:
-            self.logger.log_good("Protected Memory Range configuration is supported")
+            self.logger.log_good('Protected Memory Range configuration is supported')
         else:
-            self.logger.log_bad("Protected Memory Range configuration is not supported")
-            self.res - ModuleResult.FAILED
-
-        # Check PRMRR configurations on each core.
-        self.logger.log("\n[*] Verifying PRMRR Configuration on each core.")
-        first_iter = True
-        prmrr_valid_config = 0
-        prmrr_base = 0
-        prmrr_base_memtype = 0
-        prmrr_uncore_base = 0
-        prmrr_uncore_base_new = 0
-        prmrr_mask = 0
-        prmrr_uncore_mask = 0
-        prmrr_uncore_mask_new = 0
-        prmrr_mask_vld = 0
-        prmrr_uncore_mask_vld = 0
-        prmrr_uncore_mask_vld_new = 0
-        prmrr_mask_lock = 0
-        prmrr_uncore_mask_lock = 0
-        prmrr_uncore_mask_lock_new = 0
-        prmrr_uniform = True
-        prmrr_locked = True
-        check_uncore_vals = self.cs.is_register_defined('PRMRR_UNCORE_PHYBASE') and self.cs.is_register_defined('PRMRR_UNCORE_MASK')
-        for tid in range(self.cs.msr.get_cpu_thread_count()):
-            prmrr_valid_config_new = self.cs.read_register('PRMRR_VALID_CONFIG', tid)
-            prmrr_base_new = self.cs.read_register_field('PRMRR_PHYBASE', 'PRMRR_base_address_fields', False, tid)
-            prmrr_base_memtype_new = self.cs.read_register_field('PRMRR_PHYBASE', 'PRMRR_MEMTYPE', False, tid)
-            prmrr_mask_new = self.cs.read_register_field('PRMRR_MASK', 'PRMRR_mask_bits', False, tid)
-            prmrr_mask_vld_new = self.cs.read_register_field('PRMRR_MASK', 'PRMRR_VLD', False, tid)
-            prmrr_mask_lock_new = self.cs.read_register_field('PRMRR_MASK', 'PRMRR_LOCK', False, tid)
-            if check_uncore_vals:
-                prmrr_uncore_base_new = self.cs.read_register_field('PRMRR_UNCORE_PHYBASE', 'PRMRR_base_address_fields', False, tid)
-                prmrr_uncore_mask_new = self.cs.read_register_field('PRMRR_UNCORE_MASK', 'PRMRR_mask_bits', False, tid)
-                prmrr_uncore_mask_vld_new = self.cs.read_register_field('PRMRR_UNCORE_MASK', 'PRMRR_VLD', False, tid)
-                prmrr_uncore_mask_lock_new = self.cs.read_register_field('PRMRR_UNCORE_MASK', 'PRMRR_LOCK', False, tid)
-            if self.logger.VERBOSE:
-                self.logger.log("[*]      CPU{:d} PRMRR_VALID_CONFIG: 0x{:010X}".format(tid, prmrr_valid_config_new))
-                self.logger.log("[*]      CPU{:d} PRMRR base address: 0x{:012X}".format(tid, prmrr_base_new))
-                self.logger.log("[*]      CPU{:d} PRMRR memory type: 0x{:d}".format(tid, prmrr_base_memtype_new))
-                self.logger.log("[*]      CPU{:d} PRMRR mask address: 0x{:012X}".format(tid, prmrr_mask_new))
-                self.logger.log("[*]      CPU{:d} PRMRR mask valid: 0x{:d}".format(tid, prmrr_mask_vld_new))
-                self.logger.log("[*]      CPU{:d} PRMRR mask lock: 0x{:d}".format(tid, prmrr_mask_lock_new))
-                if check_uncore_vals:
-                    self.logger.log("[*]      CPU{:d} PRMRR uncore base address: 0x{:012X}".format(tid, prmrr_uncore_base_new))
-                    self.logger.log("[*]      CPU{:d} PRMRR uncore mask address: 0x{:012X}".format(tid, prmrr_uncore_mask_new))
-                    self.logger.log("[*]      CPU{:d} PRMRR uncore mask valid: 0x{:d}".format(tid, prmrr_uncore_mask_vld_new))
-                    self.logger.log("[*]      CPU{:d} PRMRR uncore mask lock: 0x{:d}".format(tid, prmrr_uncore_mask_lock_new))
-            if first_iter:
-                prmrr_valid_config = prmrr_valid_config_new
-                prmrr_base = prmrr_base_new
-                prmrr_base_memtype = prmrr_base_memtype_new
-                prmrr_mask = prmrr_mask_new
-                prmrr_mask_vld = prmrr_mask_vld_new
-                prmrr_mask_lock = prmrr_mask_lock_new
-                prmrr_uncore_base = prmrr_uncore_base_new
-                prmrr_uncore_mask = prmrr_uncore_mask_new
-                prmrr_uncore_mask_vld = prmrr_uncore_mask_vld_new
-                prmrr_uncore_mask_lock = prmrr_uncore_mask_lock_new
-                first_iter = False
-            if prmrr_mask_lock_new == 0:
-                prmrr_locked = False
-            if ((prmrr_valid_config != prmrr_valid_config_new) or
-                (prmrr_base != prmrr_base_new) or (prmrr_mask != prmrr_mask_new) or
-                (prmrr_uncore_base != prmrr_uncore_base_new) or
-                (prmrr_uncore_mask != prmrr_uncore_mask_new) or
-                (prmrr_mask_vld != prmrr_mask_vld_new) or
-                (prmrr_mask_lock != prmrr_mask_lock_new) or
-                (prmrr_uncore_mask_vld != prmrr_uncore_mask_vld_new) or
-                (prmrr_uncore_mask_lock != prmrr_uncore_mask_lock_new) or
-                    (prmrr_base_memtype != prmrr_base_memtype_new)):
-                prmrr_uniform = False
-        if not prmrr_uniform:
-            self.logger.log_bad("PRMRR config is not uniform across all CPUs")
+            self.logger.log_bad('Protected Memory Range configuration is not supported')
             self.res = ModuleResult.FAILED
-        else:
-            self.logger.log_good("PRMRR config is uniform across all CPUs")
-            prmrr_configs = []
-            # NB: BWG Provides only a list of 4 possible values, see item 5, section 2.1. So values e.g. 0x050 are prohibited, report error.
-            config_support = False
-            if BIT0 & prmrr_valid_config:
-                prmrr_configs.append("1M")
-                config_support = True
-            if BIT1 & prmrr_valid_config:
-                prmrr_configs.append("2M")
-                config_support = True
-            if BIT5 & prmrr_valid_config:
-                prmrr_configs.append("32M")
-                config_support = True
-            if BIT6 & prmrr_valid_config:
-                prmrr_configs.append("64M")
-                config_support = True
-            if BIT7 & prmrr_valid_config:
-                prmrr_configs.append("128M")
-                config_support = True
-            if BIT8 & prmrr_valid_config:
-                prmrr_configs.append("256M")
-                config_support = True
-            if config_support:
-                self.logger.log("[*]  PRMRR config supports: {}".format(', '.join(prmrr_configs)))
-            else:
-                self.logger.log("[*] PRMMR config has improper value")
-                sgx_ok = False
+            self.result.setStatusBit(self.result.status.UNSUPPORTED_FEATURE)
 
-            # In some cases the PRMRR base and mask may be zero
-            if (prmrr_base == 0) and (prmrr_mask == 0):
-                self.logger.log("[*] PRMRR Base and Mask are set to zero.  PRMRR appears to be disabled.")
-                self.logger.log("[*]   Skipping Base/Mask settings.")
-            else:
-                self.logger.log("[*]  PRMRR base address: 0x{:012X}".format(prmrr_base))
-                self.logger.log("[*]  Verifying PRMR memory type is valid")
-                self.logger.log("[*]  PRMRR memory type : 0x{:X}".format(prmrr_base_memtype))
-                if prmrr_base_memtype == 0x6:
-                    self.logger.log_good("PRMRR memory type is WB as expected")
-                else:
-                    self.logger.log_bad("Unexpected PRMRR memory type (not WB)")
-                    self.res = ModuleResult.FAILED
-                self.logger.log("[*]  PRMRR mask address: 0x{:012X}".format(prmrr_mask))
-                self.logger.log("[*]  Verifying PRMR address are valid")
-                self.logger.log("[*]      PRMRR uncore mask valid: 0x{:d}".format(prmrr_uncore_mask_vld))
-                if prmrr_mask_vld == 0x1:
-                    self.logger.log_good("Mcheck marked PRMRR address as valid")
-                else:
-                    self.logger.log_bad("Mcheck marked PRMRR address as invalid")
-                    self.res = ModuleResult.FAILED
-                self.logger.log("[*]  Verifying if PRMR mask register is locked")
-                self.logger.log("[*]      PRMRR mask lock: 0x{:X}".format(prmrr_mask_lock))
-                if prmrr_locked:
-                    self.logger.log_good("PRMRR MASK register is locked")
-                else:
-                    self.logger.log_bad("PRMRR MASK register is not locked")
-                    self.res = ModuleResult.FAILED
-                if check_uncore_vals:
-                    self.logger.log("[*]  PRMRR uncore base address: 0x{:012X}".format(prmrr_uncore_base))
-                    self.logger.log("[*]  PRMRR uncore mask address: 0x{:012X}".format(prmrr_uncore_mask))
-                    self.logger.log("[*]  Verifying PRMR uncore address are valid")
-                    self.logger.log("[*]      PRMRR uncore mask valid: 0x{:X}".format(prmrr_uncore_mask_vld))
-                    if prmrr_uncore_mask_vld == 0x1:
-                        self.logger.log_good("Mcheck marked uncore PRMRR address as valid")
-                    else:
-                        self.logger.log_bad("Mcheck marked uncore PRMRR address as invalid")
-                        self.res = ModuleResult.FAILED
-                    self.logger.log("[*]  Verifying if PRMR uncore mask register is locked")
-                    self.logger.log("[*]      PRMRR uncore mask lock: 0x{:X}".format(prmrr_uncore_mask_lock))
-                    if prmrr_uncore_mask_lock == 0x1:
-                        self.logger.log_good("PMRR uncore MASK register is locked")
-                    else:
-                        self.logger.log_bad("PMRR uncore MASK register is not locked")
-                        self.res = ModuleResult.FAILED
+        self.logger.log('\n[*] Verifying PRMRR Configuration on each core.')
+
+        self.prmrr = self.PRMRR(self.logger, self.cs)
+        try:
+            self.prmrr._check_prmrr()
+        except HWAccessViolationError:
+            self.prmrr.reset_variables()
+            self.logger.log_important('Some PRMRR registers could not be read. Following results may not be accurate.')
+            if self.cs.os_helper.is_windows():
+                self.logger.log_important('Please try running in a Linux environment. The results there may be more complete.')
+        else:
+            self.check_prmrr_values()
 
         if bios_feature_control_enable and locked:
             sgx1_instr_support = False
             sgx2_instr_support = False
-            self.logger.log("\n[*] Verifying if SGX instructions are supported")
+            self.logger.log('\n[*] Verifying if SGX instructions are supported')
             for tid in range(self.cs.msr.get_cpu_thread_count()):
                 status = self.helper.set_affinity(tid)
                 if status == -1:
-                    self.logger.log_verbose("[*] Failed to set affinity to CPU{:d}".format(tid))
+                    self.logger.log_verbose(f'[*] Failed to set affinity to CPU{tid:d}')
                 (r_eax, _, _, _) = self.cs.cpu.cpuid(0x012, 0x00)
                 if r_eax & BIT0:
-                    self.logger.log_verbose("[*] CPU{:d} SGX-1 instructions are supported".format(tid))
+                    self.logger.log_verbose(f'[*] CPU{tid:d} SGX-1 instructions are supported')
                     sgx1_instr_support = True
                 else:
-                    self.logger.log_verbose("[*] CPU{:d} SGX-1 instructions are not supported".format(tid))
+                    self.logger.log_verbose(f'[*] CPU{tid:d} SGX-1 instructions are not supported')
                 if r_eax & BIT1:
-                    self.logger.log_verbose("[*] CPU{:d} SGX-2 instructions are supported".format(tid))
+                    self.logger.log_verbose(f'[*] CPU{tid:d} SGX-2 instructions are supported')
                     sgx2_instr_support = True
                 else:
-                    self.logger.log_verbose("[*] CPU{:d} SGX-2 instructions are not supported".format(tid))
+                    self.logger.log_verbose(f'[*] CPU{tid:d} SGX-2 instructions are not supported')
             if sgx1_instr_support:
-                self.logger.log_good("Intel SGX instructions are supported and available to use")
+                self.logger.log_good('Intel SGX instructions are supported and available to use')
                 sgx_ok = True
             else:
-                self.logger.log_bad("Intel SGX instructions are not supported on system")
+                self.logger.log_bad('Intel SGX instructions are not supported on system')
                 sgx_ok = False
             if sgx2_instr_support:
-                self.logger.log("[*] SGX-2 instructions are supported")
+                self.logger.log('[*] SGX-2 instructions are supported')
             else:
-                self.logger.log("[*] SGX-2 instructions are not supported")
+                self.logger.log('[*] SGX-2 instructions are not supported')
         else:
             sgx_ok = False
 
-        self.logger.log("\n[*] Verifying if SGX is available to use")
-        if sgx_ok and prmrr_enable and prmrr_uniform:
-            self.logger.log_good("Intel SGX is available to use")
-        elif (not sgx_ok) and (not bios_feature_control_enable) and prmrr_enable and prmrr_uniform:
-            self.logger.log_important("Intel SGX instructions disabled by firmware")
+        self.logger.log('\n[*] Verifying if SGX is available to use')
+        if sgx_ok and prmrr_enable and self.prmrr.uniform:
+            self.logger.log_good('Intel SGX is available to use')
+        elif (not sgx_ok) and (not bios_feature_control_enable) and prmrr_enable and self.prmrr.uniform:
+            self.logger.log_important('Intel SGX instructions disabled by firmware')
+            self.result.setStatusBit(self.result.status.FEATURE_DISABLED)
             if self.res == ModuleResult.PASSED:
                 self.res = ModuleResult.WARNING
         else:
-            self.logger.log_bad("Intel SGX is not available to use")
+            self.logger.log_bad('Intel SGX is not available to use')
             self.res = ModuleResult.FAILED
+            self.result.setStatusBit(self.result.status.FEATURE_DISABLED)
 
-        if self.cs.is_register_defined('BIOS_SE_SVN') and self.cs.is_register_defined('BIOS_SE_SVN_STATUS'):
-            self.logger.log("\n[*] BIOS_SE_SVN : 0x{:016X}".format(self.cs.read_register('BIOS_SE_SVN')))
-            self.logger.log("[*]     PFAT_SE_SVN : 0x{:02X}".format(self.cs.read_register_field('BIOS_SE_SVN', 'PFAT_SE_SVN')))
-            self.logger.log("[*]     ANC_SE_SVN : 0x{:02X}".format(self.cs.read_register_field('BIOS_SE_SVN', 'ANC_SE_SVN')))
-            self.logger.log("[*]     SCLEAN_SE_SVN : 0x{:02X}".format(self.cs.read_register_field('BIOS_SE_SVN', 'SCLEAN_SE_SVN')))
-            self.logger.log("[*]     SINIT_SE_SVN : 0x{:02X}".format(self.cs.read_register_field('BIOS_SE_SVN', 'SINIT_SE_SVN')))
-            self.logger.log("[*] BIOS_SE_SVN_STATUS : 0x{:016X}".format(self.cs.read_register('BIOS_SE_SVN_STATUS')))
-            self.logger.log("[*]     BIOS_SE_SVN ACM threshold lock : 0x{:d}".format(self.cs.read_register_field('BIOS_SE_SVN_STATUS', 'LOCK')))
+        if self.cs.register.is_defined('BIOS_SE_SVN') and self.cs.register.is_defined('BIOS_SE_SVN_STATUS'):
+            self.cs.register.print('BIOS_SE_SVN', self.cs.register.read('BIOS_SE_SVN'))
+            self.cs.register.print('BIOS_SE_SVN_STATUS', self.cs.register.read('BIOS_SE_SVN_STATUS'))
 
-        self.logger.log("\n[*] Check SGX debug feature settings")
-        sgx_debug_status = self.cs.read_register_field('SGX_DEBUG_MODE', 'SGX_DEBUG_MODE_STATUS_BIT')
-        self.logger.log("[*] SGX Debug Enable             : {:d}".format(sgx_debug_status))
-        self.logger.log("[*] Check Silicon debug feature settings")
-        debug_interface = self.cs.read_register('IA32_DEBUG_INTERFACE')
-        self.logger.log("[*]   IA32_DEBUG_INTERFACE : 0x{:08X}".format(debug_interface))
-        debug_enable = self.cs.get_register_field('IA32_DEBUG_INTERFACE', debug_interface, 'ENABLE')
-        debug_lock = self.cs.get_register_field('IA32_DEBUG_INTERFACE', debug_interface, 'LOCK')
-        self.logger.log("[*]     Debug enabled      : {:d}".format(debug_enable))
-        self.logger.log("[*]     Lock               : {:d}".format(debug_lock))
-
-        if sgx_debug_status == 1:
-            self.logger.log_bad("SGX debug mode is enabled")
-            self.res = ModuleResult.FAILED
+        debug_res, debug_result = self.check_debug()
+        if self.cs.control.is_defined('SamplePart') and self.cs.control.get('SamplePart') == 1:
+            self.logger.log_passed('CPU is a Sample Part. Test is N/A.')
         else:
-            self.logger.log_good("SGX debug mode is disabled")
-        if debug_enable == 0:
-            self.logger.log_good("Silicon debug features are disabled")
-        else:
-            self.logger.log_bad("Silicon debug features are not disabled")
-            self.res = ModuleResult.FAILED
-        if (0 == debug_enable) and (1 == sgx_debug_status):
-            self.logger.log_bad("Enabling sgx_debug without enabling debug mode in msr IA32_DEBUG_INTERFACE is not a valid configuration")
-            self.res = ModuleResult.FAILED
-        if debug_lock == 1:
-            self.logger.log_good("Silicon debug Feature Control register is locked")
-        else:
-            self.logger.log_bad("Silicon debug Feature Control register is not locked")
-            self.res = ModuleResult.FAILED
+            self.res = debug_res
+            if debug_result is not None:
+                self.result.setStatusBit(debug_result)
 
         return self.res
 
-    def run(self, module_argv):
-        self.logger.start_test("Check SGX feature support")
+    def check_debug(self) -> Tuple:
+        debug_res = self.res
+        debug_result = None
+        self.logger.log('\n[*] Check SGX debug feature settings')
+        sgx_debug_status = self.cs.register.read_field('SGX_DEBUG_MODE', 'SGX_DEBUG_MODE_STATUS_BIT')
+        self.logger.log(f'[*] SGX Debug Enable             : {sgx_debug_status:d}')
+        self.logger.log('[*] Check Silicon debug feature settings')
+        debug_interface = self.cs.register.read('IA32_DEBUG_INTERFACE')
+        self.logger.log(f'[*]   IA32_DEBUG_INTERFACE : 0x{debug_interface:08X}')
+        debug_enable = self.cs.register.get_field('IA32_DEBUG_INTERFACE', debug_interface, 'ENABLE')
+        debug_lock = self.cs.register.get_field('IA32_DEBUG_INTERFACE', debug_interface, 'LOCK')
+        self.logger.log(f'[*]     Debug enabled      : {debug_enable:d}')
+        self.logger.log(f'[*]     Lock               : {debug_lock:d}')
+
+        if sgx_debug_status == 1:
+            self.logger.log_bad('SGX debug mode is enabled')
+            debug_res = ModuleResult.FAILED
+            debug_result = self.result.status.DEBUG_FEATURE
+        else:
+            self.logger.log_good('SGX debug mode is disabled')
+        if debug_enable == 0:
+            self.logger.log_good('Silicon debug features are disabled')
+        else:
+            self.logger.log_bad('Silicon debug features are not disabled')
+            debug_res = ModuleResult.FAILED
+            debug_result = self.result.status.DEBUG_FEATURE
+        if (0 == debug_enable) and (1 == sgx_debug_status):
+            self.logger.log_bad('Enabling sgx_debug without enabling debug mode in msr IA32_DEBUG_INTERFACE is not a valid configuration')
+            debug_res = ModuleResult.FAILED
+            debug_result = self.result.status.CONFIGURATION
+        if debug_lock == 1:
+            self.logger.log_good('Silicon debug Feature Control register is locked')
+        else:
+            self.logger.log_bad('Silicon debug Feature Control register is not locked')
+            debug_res = ModuleResult.FAILED
+            debug_result = self.result.status.LOCKS
+        return debug_res, debug_result
+
+    def check_prmrr_values(self) -> None:
+        if not self.prmrr:
+            return
+        if not self.prmrr.uniform:
+            self.logger.log_bad('PRMRR config is not uniform across all CPUs')
+            self.res = ModuleResult.FAILED
+            self.result.setStatusBit(self.result.status.CONFIGURATION)
+        else:
+            self.logger.log_good('PRMRR config is uniform across all CPUs')
+            prmrr_configs = []
+            config_support = False
+            if BIT0 & self.prmrr.valid_config:
+                prmrr_configs.append('1M')
+                config_support = True
+            if BIT1 & self.prmrr.valid_config:
+                prmrr_configs.append('2M')
+                config_support = True
+            if BIT5 & self.prmrr.valid_config:
+                prmrr_configs.append('32M')
+                config_support = True
+            if BIT6 & self.prmrr.valid_config:
+                prmrr_configs.append('64M')
+                config_support = True
+            if BIT7 & self.prmrr.valid_config:
+                prmrr_configs.append('128M')
+                config_support = True
+            if BIT8 & self.prmrr.valid_config:
+                prmrr_configs.append('256M')
+                config_support = True
+            if config_support:
+                prmrr_str = ', '.join(prmrr_configs)
+                self.logger.log(f'[*]  PRMRR config supports: {prmrr_str}')
+            else:
+                self.logger.log('[*] PRMMR config has improper value')
+
+            if (self.prmrr.base == 0) and (self.prmrr.mask == 0):
+                self.logger.log('[*] PRMRR Base and Mask are set to zero.  PRMRR appears to be disabled.')
+                self.logger.log('[*]   Skipping Base/Mask settings.')
+            else:
+                self.logger.log(f'[*]  PRMRR base address: 0x{self.prmrr.base:012X}')
+                self.logger.log('[*]  Verifying PRMR memory type is valid')
+                self.logger.log(f'[*]  PRMRR memory type : 0x{self.prmrr.base_memtype:X}')
+                if self.prmrr.base_memtype == 0x6:
+                    self.logger.log_good('PRMRR memory type is WB as expected')
+                else:
+                    self.logger.log_bad('Unexpected PRMRR memory type (not WB)')
+                    self.res = ModuleResult.FAILED
+                    self.result.setStatusBit(self.result.status.CONFIGURATION)
+                self.logger.log(f'[*]  PRMRR mask address: 0x{self.prmrr.mask:012X}')
+                self.logger.log('[*]  Verifying PRMR address are valid')
+                self.logger.log(f'[*]      PRMRR uncore mask valid: 0x{self.prmrr.uncore_mask_vld:d}')
+                if self.prmrr.mask_vld == 0x1:
+                    self.logger.log_good('Mcheck marked PRMRR address as valid')
+                else:
+                    self.logger.log_bad('Mcheck marked PRMRR address as invalid')
+                    self.res = ModuleResult.FAILED
+                    self.result.setStatusBit(self.result.status.CONFIGURATION)
+                self.logger.log('[*]  Verifying if PRMR mask register is locked')
+                self.logger.log(f'[*]      PRMRR mask lock: 0x{self.prmrr.mask_lock:X}')
+                if self.prmrr.locked:
+                    self.logger.log_good('PRMRR MASK register is locked')
+                else:
+                    self.logger.log_bad('PRMRR MASK register is not locked')
+                    self.res = ModuleResult.FAILED
+                    self.result.setStatusBit(self.result.status.LOCKS)
+                if self.prmrr.check_uncore_vals:
+                    self.logger.log(f'[*]  PRMRR uncore base address: 0x{self.prmrr.uncore_base:012X}')
+                    self.logger.log(f'[*]  PRMRR uncore mask address: 0x{self.prmrr.uncore_mask:012X}')
+                    self.logger.log('[*]  Verifying PRMR uncore address are valid')
+                    self.logger.log(f'[*]      PRMRR uncore mask valid: 0x{self.prmrr.uncore_mask_vld:X}')
+                    if self.prmrr.uncore_mask_vld == 0x1:
+                        self.logger.log_good('Mcheck marked uncore PRMRR address as valid')
+                    else:
+                        self.logger.log_bad('Mcheck marked uncore PRMRR address as invalid')
+                        self.res = ModuleResult.FAILED
+                        self.result.setStatusBit(self.result.status.CONFIGURATION)
+                    self.logger.log('[*]  Verifying if PRMR uncore mask register is locked')
+                    self.logger.log(f'[*]      PRMRR uncore mask lock: 0x{self.prmrr.uncore_mask_lock:X}')
+                    if self.prmrr.uncore_mask_lock == 0x1:
+                        self.logger.log_good('PMRR uncore MASK register is locked')
+                    else:
+                        self.logger.log_bad('PMRR uncore MASK register is not locked')
+                        self.res = ModuleResult.FAILED
+                        self.result.setStatusBit(self.result.status.LOCKS)
+
+    class PRMRR():
+        def __init__(self, logger, cs) -> None:
+            self.logger = logger
+            self.cs = cs
+            self.reset_variables()
+            self.sgx_helper = SGX_Check_Sidekick(self.cs)
+
+        def reset_variables(self) -> None:
+            self.valid_config = 0
+            self.base = 0
+            self.base_memtype = 0
+            self.uncore_base = 0
+            self.uncore_base_new = 0
+            self.mask = 0
+            self.uncore_mask = 0
+            self.uncore_mask_new = 0
+            self.mask_vld = 0
+            self.uncore_mask_vld = 0
+            self.uncore_mask_vld_new = 0
+            self.mask_lock = 0
+            self.uncore_mask_lock = 0
+            self.uncore_mask_lock_new = 0
+            self.uniform = False
+            self.locked = False
+            self.check_uncore_vals = False
+
+        def _check_prmrr(self) -> None:
+            self.reset_variables()
+            first_iter = True
+            self.uniform = True
+            self.locked = True
+            self.check_uncore_vals = self.cs.register.is_defined('PRMRR_UNCORE_PHYBASE') and self.cs.register.is_defined('PRMRR_UNCORE_MASK')
+            for tid in range(self.cs.msr.get_cpu_thread_count()):
+                self.check_valid = self.sgx_helper.check_valid(tid)
+                self.valid_config_new = self.cs.register.read('PRMRR_VALID_CONFIG', tid)
+                self.base_new = self.cs.register.read_field('PRMRR_PHYBASE', 'PRMRR_base_address_fields', False, tid)
+                self.base_memtype_new = self.cs.register.read_field('PRMRR_PHYBASE', 'PRMRR_MEMTYPE', False, tid)
+                self.mask_new = self.cs.register.read_field('PRMRR_MASK', 'PRMRR_mask_bits', False, tid)
+                self.mask_vld_new = self.cs.register.read_field('PRMRR_MASK', 'PRMRR_VLD', False, tid)
+                self.mask_lock_new = self.cs.register.read_field('PRMRR_MASK', 'PRMRR_LOCK', False, tid)
+                if self.check_uncore_vals:
+                    self.uncore_base_new = self.cs.register.read_field('PRMRR_UNCORE_PHYBASE', 'PRMRR_base_address_fields', False, tid)
+                    self.uncore_mask_new = self.cs.register.read_field('PRMRR_UNCORE_MASK', 'PRMRR_mask_bits', False, tid)
+                    self.uncore_mask_vld_new = self.cs.register.read_field('PRMRR_UNCORE_MASK', 'PRMRR_VLD', False, tid)
+                    self.uncore_mask_lock_new = self.cs.register.read_field('PRMRR_UNCORE_MASK', 'PRMRR_LOCK', False, tid)
+                if self.logger.VERBOSE:
+                    self.logger.log(f'[*]      CPU{tid:d} PRMRR_VALID_CONFIG: 0x{self.valid_config_new:010X}')
+                    self.logger.log(f'[*]      CPU{tid:d} PRMRR base address: 0x{self.base_new:012X}')
+                    self.logger.log(f'[*]      CPU{tid:d} PRMRR memory type: 0x{self.base_memtype_new:d}')
+                    self.logger.log(f'[*]      CPU{tid:d} PRMRR mask address: 0x{self.mask_new:012X}')
+                    self.logger.log(f'[*]      CPU{tid:d} PRMRR mask valid: 0x{self.mask_vld_new:d}')
+                    self.logger.log(f'[*]      CPU{tid:d} PRMRR mask lock: 0x{self.mask_lock_new:d}')
+                    if self.check_uncore_vals:
+                        self.logger.log(f'[*]      CPU{tid:d} PRMRR uncore base address: 0x{self.uncore_base_new:012X}')
+                        self.logger.log(f'[*]      CPU{tid:d} PRMRR uncore mask address: 0x{self.uncore_mask_new:012X}')
+                        self.logger.log(f'[*]      CPU{tid:d} PRMRR uncore mask valid: 0x{self.uncore_mask_vld_new:d}')
+                        self.logger.log(f'[*]      CPU{tid:d} PRMRR uncore mask lock: 0x{self.uncore_mask_lock_new:d}')
+                if first_iter:
+                    self.valid_config = self.valid_config_new
+                    self.base = self.base_new
+                    self.base_memtype = self.base_memtype_new
+                    self.mask = self.mask_new
+                    self.mask_vld = self.mask_vld_new
+                    self.mask_lock = self.mask_lock_new
+                    self.uncore_base = self.uncore_base_new
+                    self.uncore_mask = self.uncore_mask_new
+                    self.uncore_mask_vld = self.uncore_mask_vld_new
+                    self.uncore_mask_lock = self.uncore_mask_lock_new
+                    first_iter = False
+                if self.mask_lock_new == 0:
+                    self.locked = False
+                if ((self.valid_config != self.valid_config_new) or
+                    (self.base != self.base_new) or (self.mask != self.mask_new) or
+                    (self.uncore_base != self.uncore_base_new) or
+                    (self.uncore_mask != self.uncore_mask_new) or
+                    (self.mask_lock != self.mask_lock_new) or
+                    (self.check_valid and ((self.mask_vld != self.mask_vld_new) or
+                    (self.uncore_mask_vld != self.uncore_mask_vld_new))) or
+                    (self.uncore_mask_lock != self.uncore_mask_lock_new) or
+                        (self.base_memtype != self.base_memtype_new)):
+                    self.uniform = False
+
+    def run(self, _) -> int:
+        self.logger.start_test('Check SGX feature support')
 
         self.res = self.check_sgx_config()
         if self.res == ModuleResult.PASSED:
@@ -381,4 +432,6 @@ class sgx_check(BaseModule):
             self.logger.log_warning('One or more SGX checks detected a warning')
         else:
             self.logger.log_failed('One or more SGX checks failed')
-        return self.res
+
+        return self.result.getReturnCode(self.res)
+

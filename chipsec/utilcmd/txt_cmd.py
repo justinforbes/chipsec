@@ -26,23 +26,25 @@ Usage:
 """
 
 from argparse import ArgumentParser
-import binascii
-from chipsec.command import BaseCommand
-from chipsec.exceptions import HWAccessViolationError
+from chipsec.command import BaseCommand, toLoad
+from chipsec.library.exceptions import HWAccessViolationError
+from chipsec.testcase import ExitCode
 import struct
 
 
 class TXTCommand(BaseCommand):
 
-    def requires_driver(self):
+    def requirements(self) -> toLoad:
+        return toLoad.All
+
+    def parse_arguments(self) -> None:
         parser = ArgumentParser(usage=__doc__)
         subparsers = parser.add_subparsers()
         parser_state = subparsers.add_parser('dump')
         parser_state.set_defaults(func=self.txt_dump)
         parser_state = subparsers.add_parser('state')
         parser_state.set_defaults(func=self.txt_state)
-        parser.parse_args(self.argv[2:], namespace=self)
-        return True
+        parser.parse_args(self.argv, namespace=self)
 
     def txt_dump(self):
         # Read TXT Public area as hexdump, with absolute address and skipping zeros
@@ -61,14 +63,16 @@ class TXTCommand(BaseCommand):
 
     def _log_register(self, reg_name):
         """Log the content of a register with lines starting with [CHIPSEC]"""
-        reg_def = self.cs.get_register_def(reg_name)
-        value = self.cs.read_register(reg_name)
+        if not self.cs.register.is_defined(reg_name):
+            return
+        reg_def = self.cs.register.get_def(reg_name)
+        value = self.cs.register.read(reg_name)
         desc = reg_def["desc"]
         if reg_def["type"] == "memory":
-            addr = int(reg_def["address"], 16) + int(reg_def["offset"], 16)
+            addr = reg_def["address"] + reg_def["offset"]
             desc += ", at {:08X}".format(addr)
         self.logger.log("[CHIPSEC] {} = 0x{:0{width}X} ({})".format(
-            reg_name, value, desc, width=int(reg_def['size'], 16) * 2))
+            reg_name, value, desc, width=reg_def['size'] * 2))
 
         if 'FIELDS' in reg_def:
             sorted_fields = sorted(reg_def['FIELDS'].items(), key=lambda field: int(field[1]['bit']))
@@ -110,13 +114,12 @@ class TXTCommand(BaseCommand):
 
         # Read hashes of public keys
         txt_pubkey = struct.pack("<QQQQ",
-                                 self.cs.read_register("TXT_PUBLIC_KEY_0"),
-                                 self.cs.read_register("TXT_PUBLIC_KEY_1"),
-                                 self.cs.read_register("TXT_PUBLIC_KEY_2"),
-                                 self.cs.read_register("TXT_PUBLIC_KEY_3"),
+                                 self.cs.register.read("TXT_PUBLIC_KEY_0"),
+                                 self.cs.register.read("TXT_PUBLIC_KEY_1"),
+                                 self.cs.register.read("TXT_PUBLIC_KEY_2"),
+                                 self.cs.register.read("TXT_PUBLIC_KEY_3"),
                                  )
-        self.logger.log("[CHIPSEC] TXT Public Key Hash: {}".format(
-            binascii.hexlify(txt_pubkey).decode("ascii")))
+        self.logger.log("[CHIPSEC] TXT Public Key Hash: {}".format(txt_pubkey.hex()))
 
         try:
             eax, edx = self.cs.msr.read_msr(0, 0x20)
@@ -127,8 +130,7 @@ class TXTCommand(BaseCommand):
             pubkey_in_msr += struct.pack("<II", eax, edx)
             eax, edx = self.cs.msr.read_msr(0, 0x23)
             pubkey_in_msr += struct.pack("<II", eax, edx)
-            self.logger.log("[CHIPSEC] Public Key Hash in MSR[0x20...0x23]: {}".format(
-                binascii.hexlify(pubkey_in_msr).decode("ascii")))
+            self.logger.log("[CHIPSEC] Public Key Hash in MSR[0x20...0x23]: {}".format(pubkey_in_msr.hex()))
         except HWAccessViolationError as exc:
             # Report the exception and continue
             self.logger.log("[CHIPSEC] Unable to read Public Key Hash in MSR[0x20...0x23]: {}".format(exc))
@@ -164,7 +166,9 @@ class TXTCommand(BaseCommand):
         self._log_register("INSMM")
 
     def run(self):
-        self.func()
-
+        try:
+            self.func()
+        except Exception:
+            self.ExitCode = ExitCode.ERROR
 
 commands = {'txt': TXTCommand}

@@ -35,7 +35,7 @@ https://cdrdv2.intel.com/v1/dl/getContent/743844
 <!-- Information                          -->
 <!--                                      -->
 <!-- #################################### -->
-    <info family="core" detection_value="b0671">
+    <info family="core" detection_value="0xb0671">
         <sku did="0xA700" name="Raptor Lake" code="RPL" longname="RPL-S 8+16"/>
         <sku did="0xA702" name="Raptor Lake" code="RPL" longname="RPL-HX 8+16"/>
         <sku did="0xA703" name="Raptor Lake" code="RPL" longname="RPL-S 8+8"/>
@@ -61,6 +61,7 @@ https://cdrdv2.intel.com/v1/dl/getContent/743844
     </info>
 
     <mmio>
+        <bar name="MCHBAR" bus="0" dev="0" fun="0" reg="0x48" width="8" mask="0x3FFFFFE0000" size="0x20000" enable_bit="0" desc="Host Memory Mapped Register Range"/>
         <bar name="TMBAR"      register="TMBAR"      base_field="BA" size="0x20000"   desc=""/>
         <bar name="GTTMMADR"   register="GTTMMADR"   base_field="BA" size="0x1000000" desc=""/>
     </mmio>
@@ -308,7 +309,7 @@ https://cdrdv2.intel.com/v1/dl/getContent/743844
             <field name="PRMRR_MEMTYPE"             bit="0"   size="3"  desc="PRMRR Memory Type"/>
         </register>
         <register name="MSR_SMM_FEATURE_CONTROL" type="msr" msr="0x4E0" desc="Enhanced SMM Feature Control">
-            <field name="SMM_Code_Chk_En" bit="2" size="1"  desc="Prevents SMM from executing code outside the ranges defined by the SMRR"/>
+            <field name="SMM_CODE_CHK_EN" bit="2" size="1"  desc="Prevents SMM from executing code outside the ranges defined by the SMRR"/>
             <field name="LOCK"            bit="0" size="1"  desc="Lock bit"/>
         </register>
 

@@ -29,30 +29,36 @@ Examples:
 """
 
 from argparse import ArgumentParser
-from time import time
-from chipsec.command import BaseCommand
+from chipsec.command import BaseCommand, toLoad
 from chipsec.hal.smbios import SMBIOS
-from chipsec.logger import print_buffer
-from chipsec.defines import bytestostring
-
+from chipsec.library.logger import print_buffer_bytes
+from chipsec.library.options import Options
 
 class smbios_cmd(BaseCommand):
 
-    def requires_driver(self):
+    def requirements(self) -> toLoad:
+        return toLoad.All
+
+    def parse_arguments(self) -> None:
+        options = Options()
+        try:
+            default_type = options.get_section_data('Util_Config', 'smbios_get_type')
+        except Exception:
+            default_type = 'raw'
+
         parser = ArgumentParser(prog='chipsec_util smbios', usage=__doc__)
         subparsers = parser.add_subparsers()
         parser_entrypoint = subparsers.add_parser('entrypoint')
         parser_entrypoint.set_defaults(func=self.smbios_ep)
         parser_get = subparsers.add_parser('get')
-        parser_get.add_argument('method', choices=['raw', 'decoded'], default='raw', nargs='?',
+        parser_get.add_argument('method', choices=['raw', 'decoded'], default=default_type, nargs='?',
                                 help='Get raw data or decoded data.  Decoded data may not exist for all structures')
         parser_get.add_argument('type', type=int, default=None, nargs='?',
                                 help='SMBIOS type to search for')
         parser_get.add_argument('-f', '--force', action='store_true', dest='_force_32',
                                 help='Force reading from 32bit structures')
         parser_get.set_defaults(func=self.smbios_get)
-        parser.parse_args(self.argv[2:], namespace=self)
-        return True
+        parser.parse_args(self.argv, namespace=self)
 
     def smbios_ep(self):
         self.logger.log('[CHIPSEC] SMBIOS Entry Point Structures')
@@ -81,14 +87,12 @@ class smbios_cmd(BaseCommand):
                 if header is not None:
                     self.logger.log(header)
                 self.logger.log('[CHIPSEC] Raw Data')
-                print_buffer(bytestostring(data))
+                print_buffer_bytes(data)
             elif self.method == 'decoded':
                 self.logger.log(data)
             self.logger.log('==================================================================')
 
     def run(self):
-        t = time()
-
         # Create and initialize SMBIOS object for commands to use
         try:
             self.logger.log('[CHIPSEC] Attempting to detect SMBIOS structures')
@@ -102,7 +106,6 @@ class smbios_cmd(BaseCommand):
             return
 
         self.func()
-        self.logger.log('[CHIPSEC] (smbios) time elapsed {:.3f}'.format(time() - t))
 
 
 commands = {'smbios': smbios_cmd}

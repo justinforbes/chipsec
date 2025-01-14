@@ -19,18 +19,17 @@ import platform
 import tempfile
 import unittest
 try:
-    import distro
-    mSystem = distro.linux_distribution()
-except:
-    if platform.system() == "Windows":
+    from distro import codename, version, name
+    mSystem = (name(), version(), codename())
+except Exception:
+    if hasattr(platform, 'linux_distribution'):
+        mSystem = platform.linux_distribution()
+    else:
         # Windows does not have a "distribution"
         mSystem = None
-    else:
-        mSystem = platform.dist()
 
 
 import chipsec_main
-from chipsec import logger
 
 
 class GenericHardwareTest(unittest.TestCase):
@@ -72,5 +71,5 @@ class GenericHardwareTest(unittest.TestCase):
                              "At least one test raised an error")
         for test in self.PASS:
             self.assertIn("PASSED: {}".format(test), self.log)
-        for test in self.SKIPPED:
-            self.assertIn("SKIPPED: {}".format(test), self.log)
+        for test in self.WARNING:
+            self.assertIn("WARNING: {}".format(test), self.log)

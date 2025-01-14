@@ -25,9 +25,9 @@ Platform specific UEFI functionality (parsing platform specific EFI NVRAM, capsu
 import struct
 from collections import namedtuple
 from uuid import UUID
-
-from chipsec import defines
-from chipsec.logger import logger
+from typing import Dict, List, Tuple, Optional, Union, Any
+from chipsec.library import defines
+from chipsec.library.logger import logger
 from chipsec.hal.uefi_common import bit_set, VARIABLE_SIGNATURE_VSS, S3BootScriptOpcode_MDE, op_io_pci_mem, S3BootScriptOpcode_EdkCompat, EFI_GUID_STR, EFI_GUID_SIZE
 from chipsec.hal.uefi_common import op_stall, op_dispatch, op_terminate, op_mem_poll, op_unknown, get_3b_size, get_nvar_name, op_smbus_execute, script_width_formats
 from chipsec.hal.uefi_common import S3BOOTSCRIPT_ENTRY, MAX_S3_BOOTSCRIPT_ENTRY_LENGTH, VARIABLE_STORE_FV_GUID, IS_VARIABLE_ATTRIBUTE, VARIABLE_DATA
@@ -35,88 +35,8 @@ from chipsec.hal.uefi_common import EFI_VARIABLE_BOOTSERVICE_ACCESS, EFI_VARIABL
 from chipsec.hal.uefi_common import EFI_VARIABLE_HARDWARE_ERROR_RECORD, EFI_VARIABLE_AUTHENTICATED_WRITE_ACCESS, EFI_VARIABLE_TIME_BASED_AUTHENTICATED_WRITE_ACCESS
 from chipsec.hal.uefi_fv import NextFwVolume, NextFwFile, EFI_FVB2_ERASE_POLARITY, EFI_FV_FILETYPE_RAW
 
-#################################################################################################
-# Dell PFS support,
-# relied heavily on uefi-firmware-parser (https://github.com/theopolis/uefi-firmware-parser)
-#################################################################################################
-
-PFS_SEC_HDR = "<16sIIIIIIIIII16s"
-PFS_SEC_HDR_SIZE = struct.calcsize(PFS_SEC_HDR)
-U1_GUID = UUID('59b3e2f6-4e42-41f3-b1f4-446a84bfc6d0')
-
-
-class PfsFileSection:
-    def __init__(self, data):
-        self.data = data
-        self.valid = (len(data) >= PFS_SEC_HDR_SIZE)
-        data_offset = 0
-        if (self.valid):
-            gu1, u1, u2, u3, u4, u5, u6, sec_size, size1, size2, size3, gu2 = struct.unpack(PFS_SEC_HDR, data[:PFS_SEC_HDR_SIZE])
-            self.valid = (len(data) >= (PFS_SEC_HDR_SIZE + sec_size + size1 + size2 + size3))
-            if UUID(bytes_le=gu1) == U1_GUID:
-                data_offset = 0x248
-        if (self.valid):
-            self.body = data[PFS_SEC_HDR_SIZE + data_offset:PFS_SEC_HDR_SIZE + sec_size]
-            self.tail = data[PFS_SEC_HDR_SIZE + sec_size + size1 + size2 + size3:]
-
-    def parse(self):
-        return self.body
-
-
-PFS_HDR_SIG = b"PFS.HDR."
-PFS_FTR_SIG = b"PFS.FTR."
-PFS_HDR_STRUC = "<8sII"
-PFS_HDR_STRUC_SIZE = struct.calcsize(PFS_HDR_STRUC)
-PFS_FTR_STRUC = "<II8s"
-PFS_FTR_STRUC_SIZE = struct.calcsize(PFS_FTR_STRUC)
-
-
-class PfsFile:
-
-    def __init__(self, data, concat=False):
-        self.data = data
-        self.concat = concat
-        self.valid = (len(data) >= (PFS_HDR_STRUC_SIZE + PFS_FTR_STRUC_SIZE))
-        self.size = 0
-        hdr_sig = ""
-        ver = 0
-        if (self.valid):
-            hdr_sig, ver, self.size = struct.unpack(PFS_HDR_STRUC, data[:PFS_HDR_STRUC_SIZE])
-            self.valid = (PFS_FTR_STRUC_SIZE <= len(data[PFS_HDR_STRUC_SIZE + self.size:]))
-        if (self.valid):
-            ftr_size, u, ftr_sig = struct.unpack(PFS_FTR_STRUC, data[PFS_HDR_STRUC_SIZE + self.size:PFS_HDR_STRUC_SIZE + self.size + PFS_FTR_STRUC_SIZE])
-            self.valid = (hdr_sig == PFS_HDR_SIG) and (ftr_sig == PFS_FTR_SIG) and (self.size == ftr_size) and ((self.size + PFS_HDR_STRUC_SIZE + PFS_FTR_STRUC_SIZE) <= len(data))
-        if (self.valid):
-            self.body = data[PFS_HDR_STRUC_SIZE:PFS_HDR_STRUC_SIZE + self.size + PFS_FTR_STRUC_SIZE]
-            self.tail = data[PFS_HDR_STRUC_SIZE + self.size + PFS_FTR_STRUC_SIZE:]
-
-    def parse(self):
-        pfs_sec = PfsFileSection(self.body)
-        pfs_sec_data = []
-        while pfs_sec.valid:
-            sec_data = pfs_sec.parse()
-            if sec_data[:len(PFS_HDR_SIG)] == PFS_HDR_SIG:
-                sec_data = PfsFile(sec_data, True).parse()
-            if sec_data is not None:
-                pfs_sec_data.append(sec_data)
-            pfs_sec = PfsFileSection(pfs_sec.tail)
-        if self.concat:
-            return b''.join(pfs_sec_data)
-        else:
-            return pfs_sec_data
-
-
-def ParsePFS(data):
-    pfs_file = PfsFile(data, True)
-    if not pfs_file.valid:
-        return None
-    pfs_file_data = []
-    while pfs_file.valid:
-        pfs_data = pfs_file.parse()
-        if pfs_data is not None:
-            pfs_file_data.append(pfs_data)
-        pfs_file = PfsFile(pfs_file.tail)
-    return (pfs_file_data, pfs_file.data)
+EfiTableType = Union['EFI_HDR_VSS', 'EFI_HDR_VSS_AUTH', 'EFI_HDR_VSS_APPLE', None]
+EfiVariableType = Tuple[int, bytes, EfiTableType, bytes, str, int]
 
 #
 # List of supported types of EFI NVRAM format (platform/vendor specific)
@@ -138,7 +58,7 @@ class FWType:
     EFI_FW_TYPE_EVSA = 'evsa'      # 'EVSA' NVRAM format
 
 
-fw_types = []
+fw_types: List[str] = []
 for i in [t for t in dir(FWType) if not callable(getattr(FWType, t))]:
     if not i.startswith('__'):
         fw_types.append(getattr(FWType, i))
@@ -186,13 +106,11 @@ VARIABLE_STORE_STATUS_UNKNOWN = 3
 #
 # Variable State flags
 #
-VAR_IN_DELETED_TRANSITION = 0xfe  # Variable is in obsolete transistion
+VAR_IN_DELETED_TRANSITION = 0xfe  # Variable is in obsolete transition
 VAR_DELETED = 0xfd  # Variable is obsolete
 VAR_ADDED = 0x7f  # Variable has been completely added
-#IS_VARIABLE_STATE(_c, _Mask)  (BOOLEAN) (((~_c) & (~_Mask)) != 0)
 
-
-def IS_VARIABLE_STATE(_c, _Mask):
+def IS_VARIABLE_STATE(_c: int, _Mask: int) -> bool:
     return ((((~_c) & 0xFF) & ((~_Mask) & 0xFF)) != 0)
 
 
@@ -220,18 +138,18 @@ UEFI_VARIABLE_HEADER_SIZE = 28
 class UEFI_VARIABLE_HEADER(namedtuple('UEFI_VARIABLE_HEADER', 'StartId State Reserved Attributes NameSize DataSize VendorGuid0 VendorGuid1 VendorGuid2 VendorGuid3')):
     __slots__ = ()
 
-    def __str__(self):
-        return """
+    def __str__(self) -> str:
+        return f"""
 Header (UEFI)
 -------------
-StartId    : 0x{:04X}
-State      : 0x{:02X}
-Reserved   : 0x{:02X}
-Attributes : 0x{:08X}
-NameSize   : 0x{:08X}
-DataSize   : 0x{:08X}
-VendorGuid : {{0x{:08X}-0x{:04X}-0x{:04X}-0x{:08X}}}
-""".format(self.StartId, self.State, self.Reserved, self.Attributes, self.NameSize, self.DataSize, self.VendorGuid0, self.VendorGuid1, self.VendorGuid2, self.VendorGuid3)
+StartId    : 0x{self.StartId:04X}
+State      : 0x{self.State:02X}
+Reserved   : 0x{self.Reserved:02X}
+Attributes : 0x{self.Attributes:08X}
+NameSize   : 0x{self.NameSize:08X}
+DataSize   : 0x{self.DataSize:08X}
+VendorGuid : {{0x{self.VendorGuid0:08X}-0x{self.VendorGuid1:04X}-0x{self.VendorGuid2:04X}-0x{self.VendorGuid3:08X}}}
+"""
 
 
 UEFI_VARIABLE_STORE_HEADER = "<16sIBBHI"
@@ -246,8 +164,9 @@ EFI_VARIABLE_HEADER_SIZE = struct.calcsize(EFI_VARIABLE_HEADER)
 VARIABLE_STORE_FORMATTED = 0x5a
 VARIABLE_STORE_HEALTHY = 0xfe
 
+NvStore = Tuple[int, int, None]
 
-def _getNVstore_EFI(nvram_buf, efi_type):
+def _getNVstore_EFI(nvram_buf: bytes, efi_type: str) -> NvStore:
     l = (-1, -1, None)
     FvOffset = 0
     FvLength = 0
@@ -257,8 +176,7 @@ def _getNVstore_EFI(nvram_buf, efi_type):
             break
         if (fv.Guid == VARIABLE_STORE_FV_GUID):
             nvram_start = fv.HeaderSize
-            StoreGuid0, Size, Format, State, R0, R1 = \
-                struct.unpack(UEFI_VARIABLE_STORE_HEADER, fv.Image[nvram_start:nvram_start + UEFI_VARIABLE_STORE_HEADER_SIZE])
+            _, _, Format, State, _, _ = struct.unpack(UEFI_VARIABLE_STORE_HEADER, fv.Image[nvram_start:nvram_start + UEFI_VARIABLE_STORE_HEADER_SIZE])
             if ((Format == VARIABLE_STORE_FORMATTED) and (State == VARIABLE_STORE_HEALTHY)):
                 if (isCorrectVSStype(fv.Image[nvram_start:], efi_type)):
                     l = (fv.Offset + nvram_start, fv.Size - nvram_start, None)
@@ -267,19 +185,19 @@ def _getNVstore_EFI(nvram_buf, efi_type):
     return l
 
 
-def getNVstore_EFI(nvram_buf):
+def getNVstore_EFI(nvram_buf: bytes) -> NvStore:
     return _getNVstore_EFI(nvram_buf, FWType.EFI_FW_TYPE_VSS)
 
 
-def getNVstore_EFI_AUTH(nvram_buf):
+def getNVstore_EFI_AUTH(nvram_buf: bytes) -> NvStore:
     return _getNVstore_EFI(nvram_buf, FWType.EFI_FW_TYPE_VSS_AUTH)
 
 
-def getEFIvariables_UEFI(nvram_buf):
+def getEFIvariables_UEFI(nvram_buf: bytes) -> Dict[str, List[EfiVariableType]]:
     return _getEFIvariables_VSS(nvram_buf, FWType.EFI_FW_TYPE_VSS)
 
 
-def getEFIvariables_UEFI_AUTH(nvram_buf):
+def getEFIvariables_UEFI_AUTH(nvram_buf: bytes) -> Dict[str, List[EfiVariableType]]:
     return _getEFIvariables_VSS(nvram_buf, FWType.EFI_FW_TYPE_VSS_AUTH)
 
 
@@ -357,24 +275,24 @@ def getEFIvariables_UEFI_Ex( nvram_buf, auth = False ):
 class EFI_HDR_NVAR1(namedtuple('EFI_HDR_NVAR1', 'StartId TotalSize Reserved1 Reserved2 Reserved3 Attributes State')):
     __slots__ = ()
 
-    def __str__(self):
-        return """
+    def __str__(self) -> str:
+        return f"""
 Header (NVAR)
 ------------
-StartId    : 0x{:04X}
-TotalSize  : 0x{:04X}
-Reserved1  : 0x{:02X}
-Reserved2  : 0x{:02X}
-Reserved3  : 0x{:02X}
-Attributes : 0x{:02X}
-State      : 0x{:02X}
-""".format(self.StartId, self.TotalSize, self.Reserved1, self.Reserved2, self.Reserved3, self.Attributes, self.State)
+StartId    : 0x{self.StartId:04X}
+TotalSize  : 0x{self.TotalSize:04X}
+Reserved1  : 0x{self.Reserved1:02X}
+Reserved2  : 0x{self.Reserved2:02X}
+Reserved3  : 0x{self.Reserved3:02X}
+Attributes : 0x{self.Attributes:02X}
+State      : 0x{self.State:02X}
+"""
 
 
 NVAR_EFIvar_signature = b'NVAR'
 
 
-def getNVstore_NVAR(nvram_buf):
+def getNVstore_NVAR(nvram_buf: bytes) -> NvStore:
     l = (-1, -1, None)
     fv = NextFwVolume(nvram_buf)
     if (fv is None):
@@ -396,11 +314,12 @@ def getNVstore_NVAR(nvram_buf):
     return l
 
 
-def _ord(c):
+def _ord(c: Union[str, int]) -> int:
     return ord(c) if isinstance(c, str) else c
 
 
-def getEFIvariables_NVAR(nvram_buf):
+def getEFIvariables_NVAR(nvram_buf: bytes) -> Dict[str, List[EfiVariableType]]:
+    name = ''
     start = nvram_buf.find(NVAR_EFIvar_signature)
     nvram_size = len(nvram_buf)
     EFI_HDR_NVAR = "<4sH3sB"
@@ -411,6 +330,8 @@ def getEFIvariables_NVAR(nvram_buf):
     EMPTY = 0xffffffff
     while (nof + nvar_size) < nvram_size:
         start_id, size, next, attributes = struct.unpack(EFI_HDR_NVAR, nvram_buf[nof:nof + nvar_size])
+        if size == 0:
+            break
         next = get_3b_size(next)
         valid = (bit_set(attributes, NVRAM_ATTR_VLD) and (not bit_set(attributes, NVRAM_ATTR_DATA)))
         if not valid:
@@ -473,7 +394,7 @@ def getEFIvariables_NVAR(nvram_buf):
         if name not in variables.keys():
             variables[name] = []
         #                       off, buf,  hdr,  data, guid, attrs
-        variables[name].append((nof, None, None, data, guid, attribs))
+        variables[name].append((nof, b'', None, data, guid, attribs))
         nof = nof + size
     return variables
 
@@ -485,11 +406,11 @@ NVAR_HDR_SIZE = struct.calcsize(NVAR_HDR_FMT)
 #
 # Linear/simple NVAR format parsing
 #
-def getNVstore_NVAR_simple(nvram_buf):
+def getNVstore_NVAR_simple(nvram_buf: bytes) -> Tuple[Optional[int], int, None]:
     return (nvram_buf.find(NVAR_EFIvar_signature), -1, None)
 
 
-def getEFIvariables_NVAR_simple(nvram_buf):
+def getEFIvariables_NVAR_simple(nvram_buf: bytes) -> Dict[str, Tuple[int, bytes, bytes, int, str, int]]:
     nvsize = len(nvram_buf)
     hdr_fmt = NVAR_HDR_FMT
     hdr_size = struct.calcsize(hdr_fmt)
@@ -503,8 +424,8 @@ def getEFIvariables_NVAR_simple(nvram_buf):
         name_size = 0
         efi_var_name = "NA"
         if not IS_VARIABLE_ATTRIBUTE(efi_var_hdr.Attributes, EFI_VARIABLE_HARDWARE_ERROR_RECORD):
-            name_size = nvram_buf[start + hdr_size:].find('\0')
-            efi_var_name = "".join(nvram_buf[start + hdr_size: start + hdr_size + name_size])
+            name_size = nvram_buf[start + hdr_size:].find(b'\x00')
+            efi_var_name = nvram_buf[start + hdr_size: start + hdr_size + name_size].decode('latin1')
 
         next_var_offset = start + efi_var_hdr.TotalSize
         data_size = efi_var_hdr.TotalSize - name_size - hdr_size
@@ -537,17 +458,18 @@ VARIABLE_STORE_HEADER_FMT_VSS = '=IIBBHI'  # Signature is '$VSS'
 class VARIABLE_STORE_HEADER_VSS(namedtuple('VARIABLE_STORE_HEADER_VSS', 'Signature Size Format State Reserved Reserved1')):
     __slots__ = ()
 
-    def __str__(self):
-        return """
+    def __str__(self) -> str:
+        sig_str = struct.pack('=I', self.Signature)
+        return f"""
 EFI Variable Store
 -----------------------------
-Signature : {} (0x{:08X})
-Size      : 0x{:08X} bytes
-Format    : 0x{:02X}
-State     : 0x{:02X}
-Reserved  : 0x{:04X}
-Reserved1 : 0x{:08X}
-""".format(struct.pack('=I', self.Signature), self.Signature, self.Size, self.Format, self.State, self.Reserved, self.Reserved1)
+Signature : {sig_str} (0x{self.Signature:08X})
+Size      : 0x{self.Size:08X} bytes
+Format    : 0x{self.Format:02X}
+State     : 0x{self.State:02X}
+Reserved  : 0x{self.Reserved:04X}
+Reserved1 : 0x{self.Reserved1:08X}
+"""
 
 
 VARIABLE_STORE_SIGNATURE_VSS2 = UUID('DDCF3617-3275-4164-98B6-FE85707FFE7D').bytes_le
@@ -559,17 +481,17 @@ VARIABLE_STORE_HEADER_FMT_VSS2 = '=16sIBBHI'
 class VARIABLE_STORE_HEADER_VSS2(namedtuple('VARIABLE_STORE_HEADER_VSS2', 'Signature Size Format State Reserved Reserved1')):
     __slots__ = ()
 
-    def __str__(self):
-        return """
+    def __str__(self) -> str:
+        return f"""
 EFI Variable Store
 -----------------------------
-Signature : %s
-Size      : 0x%08X bytes
-Format    : 0x%02X
-State     : 0x%02X
-Reserved  : 0x%04X
-Reserved1 : 0x%08X
-""" % (UUID(bytes_le=self.Signature), self.Size, self.Format, self.State, self.Reserved, self.Reserved1)
+Signature : {UUID(bytes_le=self.Signature)}
+Size      : 0x{self.Size:08X} bytes
+Format    : 0x{self.Format:02X}
+State     : 0x{self.State:02X}
+Reserved  : 0x{self.Reserved:04X}
+Reserved1 : 0x{self.Reserved1:08X}
+"""
 
 
 VARIABLE_STORE_SIGNATURE_VSS2 = UUID('DDCF3617-3275-4164-98B6-FE85707FFE7D').bytes_le
@@ -583,18 +505,18 @@ HDR_FMT_VSS = '<HBBIII16s'
 class EFI_HDR_VSS(namedtuple('EFI_HDR_VSS', 'StartId State Reserved Attributes NameSize DataSize guid')):
     __slots__ = ()
 
-    def __str__(self):
-        return """
+    def __str__(self) -> str:
+        return f"""
 Header (VSS)
 ------------
-VendorGuid : {{{}}}
-StartId    : 0x{:04X}
-State      : 0x{:02X}
-Reserved   : 0x{:02X}
-Attributes : 0x{:08X}
-NameSize   : 0x{:08X}
-DataSize   : 0x{:08X}
-""".format(EFI_GUID_STR(self.guid), self.StartId, self.State, self.Reserved, self.Attributes, self.NameSize, self.DataSize)
+VendorGuid : {{{EFI_GUID_STR(self.guid)}}}
+StartId    : 0x{self.StartId:04X}
+State      : 0x{self.State:02X}
+Reserved   : 0x{self.Reserved:02X}
+Attributes : 0x{self.Attributes:08X}
+NameSize   : 0x{self.NameSize:08X}
+DataSize   : 0x{self.DataSize:08X}
+"""
 
 
 HDR_FMT_VSS_AUTH = '<HBBIQQQIII16s'
@@ -605,22 +527,22 @@ class EFI_HDR_VSS_AUTH(namedtuple('EFI_HDR_VSS_AUTH', 'StartId State Reserved At
     # if you don't re-define __str__ method, initialize is to None
     #__str__ = None
 
-    def __str__(self):
-        return """
+    def __str__(self) -> str:
+        return f"""
 Header (VSS_AUTH)
 ----------------
-VendorGuid     : {{{}}}
-StartId        : 0x{:04X}
-State          : 0x{:02X}
-Reserved       : 0x{:02X}
-Attributes     : 0x{:08X}
-MonotonicCount : 0x{:016X}
-TimeStamp1     : 0x{:016X}
-TimeStamp2     : 0x{:016X}
-PubKeyIndex    : 0x{:08X}
-NameSize       : 0x{:08X}
-DataSize       : 0x{:08X}
-""".format(EFI_GUID_STR(self.guid), self.StartId, self.State, self.Reserved, self.Attributes, self.MonotonicCount, self.TimeStamp1, self.TimeStamp2, self.PubKeyIndex, self.NameSize, self.DataSize)
+VendorGuid     : {{{EFI_GUID_STR(self.guid)}}}
+StartId        : 0x{self.StartId:04X}
+State          : 0x{self.State:02X}
+Reserved       : 0x{self.Reserved:02X}
+Attributes     : 0x{self.Attributes:08X}
+MonotonicCount : 0x{self.MonotonicCount:016X}
+TimeStamp1     : 0x{self.TimeStamp1:016X}
+TimeStamp2     : 0x{self.TimeStamp2:016X}
+PubKeyIndex    : 0x{self.PubKeyIndex:08X}
+NameSize       : 0x{self.NameSize:08X}
+DataSize       : 0x{self.DataSize:08X}
+"""
 
 
 HDR_FMT_VSS_APPLE = '<HBBIII16sI'
@@ -629,22 +551,21 @@ HDR_FMT_VSS_APPLE = '<HBBIII16sI'
 class EFI_HDR_VSS_APPLE(namedtuple('EFI_HDR_VSS_APPLE', 'StartId State Reserved Attributes NameSize DataSize guid unknown')):
     __slots__ = ()
 
-    def __str__(self):
-        return """
+    def __str__(self) -> str:
+        return f"""
 Header (VSS_APPLE)
 ------------
-VendorGuid : {{{}}}
-StartId    : 0x{:04X}
-State      : 0x{:02X}
-Reserved   : 0x{:02X}
-Attributes : 0x{:08X}
-NameSize   : 0x{:08X}
-DataSize   : 0x{:08X}
-Unknown    : 0x{:08X}
-""".format(EFI_GUID_STR(self.guid), self.StartId, self.State, self.Reserved, self.Attributes, self.NameSize, self.DataSize, self.unknown)
+VendorGuid : {{{EFI_GUID_STR(self.guid)}}}
+StartId    : 0x{self.StartId:04X}
+State      : 0x{self.State:02X}
+Reserved   : 0x{self.Reserved:02X}
+Attributes : 0x{self.Attributes:08X}
+NameSize   : 0x{self.NameSize:08X}
+DataSize   : 0x{self.DataSize:08X}
+Unknown    : 0x{self.unknown:08X}
+"""
 
-
-def _getNVstore_VSS(nvram_buf, vss_type):
+def _getNVstore_VSS(nvram_buf: bytes, vss_type) -> Tuple[int, int, Union[VARIABLE_STORE_HEADER_VSS, VARIABLE_STORE_HEADER_VSS2, None]]:
     if vss_type == FWType.EFI_FW_TYPE_VSS2:
         sign = VARIABLE_STORE_SIGNATURE_VSS2
     elif vss_type == FWType.EFI_FW_TYPE_VSS2_AUTH:
@@ -665,23 +586,23 @@ def _getNVstore_VSS(nvram_buf, vss_type):
     return (nvram_start, nvram_hdr.Size, nvram_hdr)
 
 
-def getNVstore_VSS(nvram_buf):
+def getNVstore_VSS(nvram_buf: bytes):
     return _getNVstore_VSS(nvram_buf, FWType.EFI_FW_TYPE_VSS)
 
 
-def getNVstore_VSS_AUTH(nvram_buf):
+def getNVstore_VSS_AUTH(nvram_buf: bytes):
     return _getNVstore_VSS(nvram_buf, FWType.EFI_FW_TYPE_VSS_AUTH)
 
 
-def getNVstore_VSS2(nvram_buf):
+def getNVstore_VSS2(nvram_buf: bytes):
     return _getNVstore_VSS(nvram_buf, FWType.EFI_FW_TYPE_VSS2)
 
 
-def getNVstore_VSS2_AUTH(nvram_buf):
+def getNVstore_VSS2_AUTH(nvram_buf: bytes):
     return _getNVstore_VSS(nvram_buf, FWType.EFI_FW_TYPE_VSS2_AUTH)
 
 
-def getNVstore_VSS_APPLE(nvram_buf):
+def getNVstore_VSS_APPLE(nvram_buf: bytes):
     return _getNVstore_VSS(nvram_buf, FWType.EFI_FW_TYPE_VSS_APPLE)
 
 
@@ -689,7 +610,7 @@ VSS_TYPES = (FWType.EFI_FW_TYPE_VSS, FWType.EFI_FW_TYPE_VSS_AUTH, FWType.EFI_FW_
 MAX_VSS_VAR_ALIGNMENT = 8
 
 
-def isCorrectVSStype(nvram_buf, vss_type):
+def isCorrectVSStype(nvram_buf: bytes, vss_type: str):
     if (vss_type not in VSS_TYPES):
         return False
 
@@ -698,7 +619,7 @@ def isCorrectVSStype(nvram_buf, vss_type):
     if (-1 == start):
         return False
 
-    next_var = nvram_buf.find(VARIABLE_SIGNATURE_VSS, start + struct.calcsize(HDR_FMT_VSS))  # skip the minimun bytes required for the header
+    next_var = nvram_buf.find(VARIABLE_SIGNATURE_VSS, start + struct.calcsize(HDR_FMT_VSS))  # skip the minimum bytes required for the header
     if (-1 == next_var):
         next_var = buf_size
 
@@ -743,7 +664,7 @@ def isCorrectVSStype(nvram_buf, vss_type):
     return False
 
 
-def _getEFIvariables_VSS(nvram_buf, _fwtype):
+def _getEFIvariables_VSS(nvram_buf: bytes, _fwtype: str) -> Dict[str, List[EfiVariableType]]:
     variables = dict()
     nvsize = len(nvram_buf)
     if _fwtype in (FWType.EFI_FW_TYPE_VSS, FWType.EFI_FW_TYPE_VSS2):
@@ -760,6 +681,8 @@ def _getEFIvariables_VSS(nvram_buf, _fwtype):
         return variables
 
     while (start + hdr_size) < nvsize:
+        efi_var_hdr = None
+        variables = {}
         if _fwtype in (FWType.EFI_FW_TYPE_VSS, FWType.EFI_FW_TYPE_VSS2):
             efi_var_hdr = EFI_HDR_VSS(*struct.unpack_from(hdr_fmt, nvram_buf[start:]))
         elif _fwtype in (FWType.EFI_FW_TYPE_VSS_AUTH, FWType.EFI_FW_TYPE_VSS2_AUTH):
@@ -767,6 +690,8 @@ def _getEFIvariables_VSS(nvram_buf, _fwtype):
         elif (FWType.EFI_FW_TYPE_VSS_APPLE == _fwtype):
             efi_var_hdr = EFI_HDR_VSS_APPLE(*struct.unpack_from(hdr_fmt, nvram_buf[start:]))
 
+        if efi_var_hdr is None:
+            return variables
         if (efi_var_hdr.StartId != VARIABLE_DATA):
             break
 
@@ -809,23 +734,23 @@ def _getEFIvariables_VSS(nvram_buf, _fwtype):
     return variables
 
 
-def getEFIvariables_VSS(nvram_buf):
+def getEFIvariables_VSS(nvram_buf: bytes) -> Dict[str, List[EfiVariableType]]:
     return _getEFIvariables_VSS(nvram_buf, FWType.EFI_FW_TYPE_VSS)
 
 
-def getEFIvariables_VSS_AUTH(nvram_buf):
+def getEFIvariables_VSS_AUTH(nvram_buf: bytes) -> Dict[str, List[EfiVariableType]]:
     return _getEFIvariables_VSS(nvram_buf, FWType.EFI_FW_TYPE_VSS_AUTH)
 
 
-def getEFIvariables_VSS2(nvram_buf):
+def getEFIvariables_VSS2(nvram_buf: bytes) -> Dict[str, List[EfiVariableType]]:
     return _getEFIvariables_VSS(nvram_buf, FWType.EFI_FW_TYPE_VSS2)
 
 
-def getEFIvariables_VSS2_AUTH(nvram_buf):
+def getEFIvariables_VSS2_AUTH(nvram_buf: bytes) -> Dict[str, List[EfiVariableType]]:
     return _getEFIvariables_VSS(nvram_buf, FWType.EFI_FW_TYPE_VSS2_AUTH)
 
 
-def getEFIvariables_VSS_APPLE(nvram_buf):
+def getEFIvariables_VSS_APPLE(nvram_buf: bytes) -> Dict[str, List[EfiVariableType]]:
     return _getEFIvariables_VSS(nvram_buf, FWType.EFI_FW_TYPE_VSS_APPLE)
 
 
@@ -840,7 +765,7 @@ TLV_HEADER = "<BBH"
 tlv_h_size = struct.calcsize(TLV_HEADER)
 
 
-def getNVstore_EVSA(nvram_buf):
+def getNVstore_EVSA(nvram_buf: bytes) -> NvStore:
     l = (-1, -1, None)
     fv = NextFwVolume(nvram_buf)
     while fv is not None:
@@ -858,8 +783,7 @@ def getNVstore_EVSA(nvram_buf):
         fv = NextFwVolume(nvram_buf, fv.Offset, fv.Size)
     return l
 
-
-def EFIvar_EVSA(nvram_buf):
+def EFIvar_EVSA(nvram_buf: bytes) -> Dict[str, List[EfiVariableType]]:
     image_size = len(nvram_buf)
     sn = 0
     EVSA_RECORD = "<IIII"
@@ -881,7 +805,7 @@ def EFIvar_EVSA(nvram_buf):
             fof = fof + 4
             continue
         value = nvram_buf[start + tlv_h_size:start + Size]
-        Signature, Unkwn0, Length, Unkwn1 = struct.unpack(EVSA_RECORD, value)
+        _, _, Length, _ = struct.unpack(EVSA_RECORD, value)
         if start + Length > image_size:  # Wrong EVSA record
             fof = fof + 4
             continue
@@ -901,12 +825,12 @@ def EFIvar_EVSA(nvram_buf):
                 g = EFI_GUID_STR(guid0)
                 guid_map[GuidId] = g
             elif (Tag0 == 0xEE) or (Tag0 == 0xE2):  # var name
-                VAR_NAME_RECORD = "<H{:d}s".format(Size - tlv_h_size - 2)
+                VAR_NAME_RECORD = f'<H{Size - tlv_h_size - 2:d}s'
                 VarId, Name = struct.unpack(VAR_NAME_RECORD, value)
                 Name = Name.decode("utf-16-le")[:-1]
                 var_list.append((Name, VarId, Tag0, Tag1))
             elif (Tag0 == 0xEF) or (Tag0 == 0xE3) or (Tag0 == 0x83):  # values
-                VAR_VALUE_RECORD = "<HHI{:d}s".format(Size - tlv_h_size - 8)
+                VAR_VALUE_RECORD = f'<HHI{Size - tlv_h_size - 8:d}s'
                 GuidId, VarId, Attributes, Data = struct.unpack(VAR_VALUE_RECORD, value)
                 value_list[VarId] = (GuidId, Attributes, Data, Tag0, Tag1)
             elif not ((Tag0 == 0xff) and (Tag1 == 0xff) and (Size == 0xffff)):
@@ -934,7 +858,7 @@ def EFIvar_EVSA(nvram_buf):
             if name not in variables.keys():
                 variables[name] = []
             #                       off,   buf,  hdr,  data,         guid, attrs
-            variables[name].append((start, None, None, var_value[2], guid, var_value[1]))
+            variables[name].append((start, b'', None, var_value[2], guid, var_value[1]))
         fof = fof + Length
     return variables
 
@@ -947,20 +871,20 @@ def EFIvar_EVSA(nvram_buf):
 # Windows 8 NtEnumerateSystemEnvironmentValuesEx (infcls = 2)
 #
 # def guid_str(guid0, guid1, guid2, guid3):
-#        return ( "{:08X}-{:04X}-{:04X}-{:4}-{:6}".format(guid0, guid1, guid2, guid3[:2].encode('hex').upper(), guid3[-6::].encode('hex').upper()) )
+#        return ( f'{guid0:08X}-{guid1:04X}-{guid2:04X}-{guid3[:2].encode('hex').upper():4}-{guid3[-6::].encode('hex').upper():6}')
 #
 # class EFI_HDR_WIN( namedtuple('EFI_HDR_WIN', 'Size DataOffset DataSize Attributes guid0 guid1 guid2 guid3') ):
 #        __slots__ = ()
 #        def __str__(self):
-#            return """
+#            return f"""
 #Header (Windows)
 # ----------------
-# VendorGuid= {{:08X}-{:04X}-{:04X}-{:4}-{:6}}
-# Size      = 0x{:08X}
-# DataOffset= 0x{:08X}
-# DataSize  = 0x{:08X}
-# Attributes= 0x{:08X}
-# """.format( self.guid0, self.guid1, self.guid2, self.guid3[:2].encode('hex').upper(), self.guid3[-6::].encode('hex').upper(), self.Size, self.DataOffset, self.DataSize, self.Attributes )
+# VendorGuid= {{self.guid0:08X}-{self.guid1:04X}-{self.guid2:04X}-{self.guid3[:2].encode('hex').upper():4}-{self.guid3[-6::].encode('hex').upper():6}}
+# Size      = 0x{self.Size:08X}
+# DataOffset= 0x{self.DataOffset:08X}
+# DataSize  = 0x{self.DataSize:08X}
+# Attributes= 0x{self.Attributes:08X}
+# """
 """
 def getEFIvariables_NtEnumerateSystemEnvironmentValuesEx2( nvram_buf ):
         start = 0
@@ -978,7 +902,7 @@ def getEFIvariables_NtEnumerateSystemEnvironmentValuesEx2( nvram_buf ):
            efi_var_data    = buffer[ off + efi_var_hdr.DataOffset : off + efi_var_hdr.DataOffset + efi_var_hdr.DataSize ]
 
            #efi_var_name = "".join( buffer[ start + header_size : start + efi_var_hdr.DataOffset ] ).decode('utf-16-le')
-           str_fmt = "{:d}s".format(efi_var_hdr.DataOffset - header_size)
+           str_fmt = f'{efi_var_hdr.DataOffset - header_size:d}s'
            s, = struct.unpack( str_fmt, buffer[ off + header_size : off + efi_var_hdr.DataOffset ] )
            efi_var_name = unicode(s, "utf-16-le", errors="replace").split(u'\u0000')[0]
 
@@ -1011,7 +935,7 @@ def decode_s3bs_opcode(s3bootscript_type, script_data):
         return decode_s3bs_opcode_def(script_data)
 
 
-def encode_s3bs_opcode(s3bootscript_type, op):
+def encode_s3bs_opcode(s3bootscript_type: int, op: S3BOOTSCRIPT_ENTRY) -> bytes:
     if S3BootScriptType.EFI_BOOT_SCRIPT_TYPE_EDKCOMPAT == s3bootscript_type:
         return encode_s3bs_opcode_edkcompat(op)
     else:
@@ -1030,8 +954,7 @@ def decode_s3bs_opcode_def(data):
     op = None
     opcode, = struct.unpack('<B', data[: 1])
     try:
-        if logger().HAL:
-            logger().log(script_opcodes[opcode])
+        logger().log_hal(script_opcodes[opcode])
     except:
         pass
     if S3BootScriptOpcode_MDE.EFI_BOOT_SCRIPT_IO_WRITE_OPCODE == opcode:
@@ -1042,27 +965,27 @@ def decode_s3bs_opcode_def(data):
     elif S3BootScriptOpcode_MDE.EFI_BOOT_SCRIPT_IO_READ_WRITE_OPCODE == opcode:
         frmt = '<BBHIQQ'
         size = struct.calcsize(frmt)
-        opcode, width, address, alignment, value, mask = struct.unpack(frmt, data[: size])
+        opcode, width, address, _, value, mask = struct.unpack(frmt, data[: size])
         op = op_io_pci_mem(opcode, size, width, address, unknown, count, None, value, mask)
     elif S3BootScriptOpcode_MDE.EFI_BOOT_SCRIPT_PCI_CONFIG_WRITE_OPCODE == opcode:
         frmt = '<BBHIQQ'
         size = struct.calcsize(frmt)
-        opcode, width, unknown, alignment, address, count = struct.unpack(frmt, data[: size])
+        opcode, width, unknown, _, address, count = struct.unpack(frmt, data[: size])
         op = op_io_pci_mem(opcode, size, width, address, unknown, count, data[size:], value, mask)
     elif S3BootScriptOpcode_MDE.EFI_BOOT_SCRIPT_PCI_CONFIG_READ_WRITE_OPCODE == opcode:
         frmt = '<BBHIQQQ'
         size = struct.calcsize(frmt)
-        opcode, width, unknown, alignment, address, value, mask = struct.unpack(frmt, data[: size])
+        opcode, width, unknown, _, address, value, mask = struct.unpack(frmt, data[: size])
         op = op_io_pci_mem(opcode, size, width, address, unknown, count, None, value, mask)
     elif S3BootScriptOpcode_MDE.EFI_BOOT_SCRIPT_MEM_WRITE_OPCODE == opcode:
         frmt = '<BBHIQQ'
         size = struct.calcsize(frmt)
-        opcode, width, unknown, alignment, address, count = struct.unpack(frmt, data[: size])
+        opcode, width, unknown, _, address, count = struct.unpack(frmt, data[: size])
         op = op_io_pci_mem(opcode, size, width, address, unknown, count, data[size:], value, mask)
     elif S3BootScriptOpcode_MDE.EFI_BOOT_SCRIPT_MEM_READ_WRITE_OPCODE == opcode:
         frmt = '<BBHIQQQ'
         size = struct.calcsize(frmt)
-        opcode, width, unknown, alignment, address, value, mask = struct.unpack(frmt, data[: size])
+        opcode, width, unknown, _, address, value, mask = struct.unpack(frmt, data[: size])
         op = op_io_pci_mem(opcode, size, width, address, unknown, count, None, value, mask)
     elif S3BootScriptOpcode_MDE.EFI_BOOT_SCRIPT_SMBUS_EXECUTE_OPCODE == opcode:
         frmt = '<BBQBB'
@@ -1072,17 +995,17 @@ def decode_s3bs_opcode_def(data):
     elif S3BootScriptOpcode_MDE.EFI_BOOT_SCRIPT_STALL_OPCODE == opcode:
         frmt = '<BBQ'
         size = struct.calcsize(frmt)
-        opcode, dummy, duration = struct.unpack(frmt, data[: size])
+        opcode, _, duration = struct.unpack(frmt, data[: size])
         op = op_stall(opcode, size, duration)
     elif S3BootScriptOpcode_MDE.EFI_BOOT_SCRIPT_DISPATCH_OPCODE == opcode:
         frmt = '<BBHIQ'
         size = struct.calcsize(frmt)
-        opcode, dummy1, dummy2, dummy3, entrypoint = struct.unpack(frmt, data[: size])
+        opcode, _, _, _, entrypoint = struct.unpack(frmt, data[: size])
         op = op_dispatch(opcode, size, entrypoint)
     elif S3BootScriptOpcode_MDE.EFI_BOOT_SCRIPT_DISPATCH_2_OPCODE == opcode:
         frmt = '<BBHIQQ'
         size = struct.calcsize(frmt)
-        opcode, dummy1, dummy2, dummy3, entrypoint, context = struct.unpack(frmt, data[: size])
+        opcode, _, _, _, entrypoint, context = struct.unpack(frmt, data[: size])
         op = op_dispatch(opcode, size, entrypoint, context)
     elif S3BootScriptOpcode_MDE.EFI_BOOT_SCRIPT_TERMINATE_OPCODE == opcode:
         frmt = '<B'
@@ -1092,7 +1015,7 @@ def decode_s3bs_opcode_def(data):
     else:
         op = op_unknown(opcode, 1)
         if logger().HAL:
-            logger().log_warning('Unrecognized opcode {:X}'.format(opcode))
+            logger().log_warning(f'Unrecognized opcode {opcode:X}')
 
     return op
 
@@ -1101,8 +1024,8 @@ def decode_s3bs_opcode_def(data):
 #
 
 
-def encode_s3bs_opcode_def(op):
-    encoded_opcode = None
+def encode_s3bs_opcode_def(op) -> bytes:
+    encoded_opcode = b''
 
     if S3BootScriptOpcode_MDE.EFI_BOOT_SCRIPT_IO_WRITE_OPCODE == op.opcode:
         encoded_hdr = struct.pack('<BBHIQ', op.opcode, op.width, op.address, 0x0, op.count)
@@ -1145,12 +1068,12 @@ def encode_s3bs_opcode_def(op):
 
     else:
         if logger().HAL:
-            logger().log_warning('Unrecognized opcode {:X}'.format(op.opcode))
+            logger().log_warning(f'Unrecognized opcode {op.opcode:X}')
 
     return encoded_opcode
 
 
-def decode_s3bs_opcode_edkcompat(data):
+def decode_s3bs_opcode_edkcompat(data: bytes):
     opcode = None
     width = None
     count = None
@@ -1164,8 +1087,7 @@ def decode_s3bs_opcode_edkcompat(data):
     opcode, size = struct.unpack(hdr_frmt, data[: header_size])
     opcode_data = data[header_size:]
     try:
-        if logger().HAL:
-            logger().log(script_opcodes[opcode])
+        logger().log_hal(script_opcodes[opcode])
     except:
         pass
 
@@ -1191,7 +1113,7 @@ def decode_s3bs_opcode_edkcompat(data):
 
     elif S3BootScriptOpcode_EdkCompat.EFI_BOOT_SCRIPT_SMBUS_EXECUTE_OPCODE == opcode:
         if logger().UTIL_TRACE or logger().HAL:
-            logger().log_warning('Cannot parse opcode {:X} yet'.format(opcode))
+            logger().log_warning(f'Cannot parse opcode {opcode:X} yet')
 
     elif S3BootScriptOpcode_EdkCompat.EFI_BOOT_SCRIPT_STALL_OPCODE == opcode:
         frmt = '<Q'
@@ -1217,7 +1139,7 @@ def decode_s3bs_opcode_edkcompat(data):
     else:
         op = op_unknown(opcode, size)
         if logger().HAL:
-            logger().log_warning('Unrecognized opcode {:X}'.format(opcode))
+            logger().log_warning(f'Unrecognized opcode {opcode:X}')
 
     return op
 
@@ -1226,8 +1148,8 @@ def decode_s3bs_opcode_edkcompat(data):
 #
 
 
-def encode_s3bs_opcode_edkcompat(op):
-    encoded_opcode = None
+def encode_s3bs_opcode_edkcompat(op: S3BOOTSCRIPT_ENTRY) -> bytes:
+    encoded_opcode = b''
 
     if S3BootScriptOpcode_EdkCompat.EFI_BOOT_SCRIPT_IO_WRITE_OPCODE == op.opcode or \
             S3BootScriptOpcode_EdkCompat.EFI_BOOT_SCRIPT_PCI_CONFIG_WRITE_OPCODE == op.opcode or \
@@ -1243,7 +1165,7 @@ def encode_s3bs_opcode_edkcompat(op):
             S3BootScriptOpcode_EdkCompat.EFI_BOOT_SCRIPT_PCI_CONFIG_READ_WRITE_OPCODE == op.opcode or \
             S3BootScriptOpcode_EdkCompat.EFI_BOOT_SCRIPT_MEM_READ_WRITE_OPCODE == op.opcode:
 
-        frmt = '<IQ2{}'.format(script_width_formats[op.width])
+        frmt = f'<IQ2{script_width_formats[op.width]}'
         encoded_opcode = struct.pack(frmt, op.width, op.address, op.value, op.mask)
 
     elif S3BootScriptOpcode_EdkCompat.EFI_BOOT_SCRIPT_SMBUS_EXECUTE_OPCODE == op.opcode:
@@ -1264,7 +1186,7 @@ def encode_s3bs_opcode_edkcompat(op):
     return encoded_opcode
 
 
-def parse_s3bootscript_entry(s3bootscript_type, script, off, log_script=False):
+def parse_s3bootscript_entry(s3bootscript_type: int, script: bytes, off: int, log_script: bool = False):
     entry_index = None
     entry_length = 0
     opcode = None
@@ -1277,7 +1199,7 @@ def parse_s3bootscript_entry(s3bootscript_type, script, off, log_script=False):
         hdr_length = struct.calcsize(fhdr)
         if remaining_len < hdr_length:
             if logger().HAL:
-                logger().log_warning('the script should have at least 0x{:X} bytes to parse next entry'.format(hdr_length))
+                logger().log_warning(f'The script should have at least 0x{hdr_length:X} bytes to parse next entry')
             return (0, None)
 
         opcode, entry_length = struct.unpack(fhdr, script[off: off + hdr_length])
@@ -1286,7 +1208,7 @@ def parse_s3bootscript_entry(s3bootscript_type, script, off, log_script=False):
         entry_data = script[off: off + entry_length]
 
         if entry_length > MAX_S3_BOOTSCRIPT_ENTRY_LENGTH:
-            logger().log_error('[uefi] Unrecognized S3 boot script format (entry length = 0x{:X})'.format(entry_length))
+            logger().log_error(f'[uefi] Unrecognized S3 boot script format (entry length = 0x{entry_length:X})')
             return (0, None)
 
         s3script_entry = S3BOOTSCRIPT_ENTRY(s3bootscript_type, entry_index, off, entry_length, entry_data)
@@ -1298,7 +1220,7 @@ def parse_s3bootscript_entry(s3bootscript_type, script, off, log_script=False):
         f = fhdr + 'B'
         if remaining_len < (hdr_length + 1):
             if logger().HAL:
-                logger().log_warning('the script should have at least 0x{:X} bytes to parse next entry'.format(hdr_length + 1))
+                logger().log_warning(f'The script should have at least 0x{hdr_length + 1:X} bytes to parse next entry')
             return (0, None)
 
         entry_index, entry_length, opcode = struct.unpack(f, script[off: off + hdr_length + 1])
@@ -1308,7 +1230,7 @@ def parse_s3bootscript_entry(s3bootscript_type, script, off, log_script=False):
         entry_data = script[off + hdr_length: off + entry_length]
 
         if entry_length > MAX_S3_BOOTSCRIPT_ENTRY_LENGTH:
-            logger().log_error('[uefi] Unrecognized S3 boot script format (entry length = 0x{:X})'.format(entry_length))
+            logger().log_error(f'[uefi] Unrecognized S3 boot script format (entry length = 0x{entry_length:X})')
             return (0, None)
 
         s3script_entry = S3BOOTSCRIPT_ENTRY(s3bootscript_type, entry_index, off, entry_length, entry_data)
@@ -1317,11 +1239,11 @@ def parse_s3bootscript_entry(s3bootscript_type, script, off, log_script=False):
     s3script_entry.decoded_opcode = decode_s3bs_opcode(s3bootscript_type, s3script_entry.data)
 
     if log_script:
-        logger().log(s3script_entry)
+        logger().log(str(s3script_entry))
     return (opcode, s3script_entry)
 
 
-def encode_s3bootscript_entry(entry):
+def encode_s3bootscript_entry(entry) -> Optional[bytes]:
     if S3BootScriptType.EFI_BOOT_SCRIPT_TYPE_EDKCOMPAT == entry.script_type:
         entry_hdr_buf = struct.pack('<HB', entry.decoded_opcode.opcode, entry.length)
     else:  # S3BootScriptType.EFI_BOOT_SCRIPT_TYPE_DEFAULT
@@ -1332,12 +1254,12 @@ def encode_s3bootscript_entry(entry):
     if entry_val_buf is not None:
         entry_buf = entry_hdr_buf + entry_val_buf
     else:
-        logger().log_warning('Could not encode opcode of boot script entry (type 0x{:X})'.format(entry.script_type))
+        logger().log_warning(f'Could not encode opcode of boot script entry (type 0x{entry.script_type:X})')
 
     return entry_buf
 
 
-def create_s3bootscript_entry_buffer(script_type, op, index=None):
+def create_s3bootscript_entry_buffer(script_type: int, op, index=None) -> bytes:
     entry_val_buf = encode_s3bs_opcode(script_type, op)
     length = len(entry_val_buf)
     if S3BootScriptType.EFI_BOOT_SCRIPT_TYPE_EDKCOMPAT == script_type:
@@ -1350,21 +1272,19 @@ def create_s3bootscript_entry_buffer(script_type, op, index=None):
     return (entry_hdr_buf + entry_val_buf)
 
 
-def id_s3bootscript_type(script, log_script=False):
+def id_s3bootscript_type(script: bytes, log_script: bool = False) -> Tuple[int, int]:
     script_header_length = 0
 
     start_op, = struct.unpack('<B', script[: 1])
     if S3BootScriptOpcode_EdkCompat.EFI_BOOT_SCRIPT_TABLE_OPCODE == start_op:
-        if logger().HAL:
-            logger().log('S3 Boot Script AA Parser')
+        logger().log_hal('S3 Boot Script AA Parser')
         script_type = S3BootScriptType.EFI_BOOT_SCRIPT_TYPE_EDKCOMPAT
         if log_script:
-            logger().log('[uefi] Start opcode 0x{:X}'.format(start_op))
+            logger().log(f'[uefi] Start opcode 0x{start_op:X}')
         # MdeModulePkg\Library\PiDxeS3BootScriptLib\BootScriptInternalFormat.h
         script_header_length = struct.calcsize("<HBHLHH")
     else:
-        if logger().HAL:
-            logger().log('S3 Boot Script DEFAULT Parser')
+        logger().log_hal('S3 Boot Script DEFAULT Parser')
         script_type = S3BootScriptType.EFI_BOOT_SCRIPT_TYPE_DEFAULT
 
     return (script_type, script_header_length)
@@ -1379,7 +1299,7 @@ def id_s3bootscript_type(script, log_script=False):
 # Fields:
 # name          func_getefivariables            func_getnvstore
 #
-EFI_VAR_DICT = {
+EFI_VAR_DICT: Dict[str, Dict[str, Any]] = {
     # UEFI
     FWType.EFI_FW_TYPE_UEFI: {'name': 'UEFI', 'func_getefivariables': getEFIvariables_UEFI, 'func_getnvstore': getNVstore_EFI},
     FWType.EFI_FW_TYPE_UEFI_AUTH: {'name': 'UEFI_AUTH', 'func_getefivariables': getEFIvariables_UEFI_AUTH, 'func_getnvstore': getNVstore_EFI_AUTH},

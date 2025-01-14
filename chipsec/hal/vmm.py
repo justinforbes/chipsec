@@ -30,7 +30,7 @@ VMM specific functionality
 import struct
 
 from typing import AnyStr, Dict, List, Optional, Tuple
-from chipsec.logger import logger, pretty_print_hex_buffer
+from chipsec.library.logger import logger, pretty_print_hex_buffer
 import chipsec.hal.pcidb
 
 
@@ -71,7 +71,7 @@ class VMM:
     def hypercall64_memory_based(self, hypervisor_input_value: int, parameters: AnyStr, size: int = 0) -> int:
         self.cs.mem.write_physical_mem(self.membuf0_pa, len(parameters[:0x1000]), parameters[:0x1000])
         regs = self.helper.hypercall(hypervisor_input_value & ~0x00010000, self.membuf0_pa, self.membuf1_pa)
-        self.output = self.helper.read_physical_mem(self.membuf1_pa, size) if size > 0 else ''
+        self.output = self.helper.read_phys_mem(self.membuf1_pa, size) if size > 0 else ''
         return regs
 
     def hypercall64_fast(self, hypervisor_input_value: int, param0: int = 0, param1: int = 0) -> int:
@@ -91,9 +91,9 @@ class VMM:
         logger().log_hal(f'[vmm] Dumping EPT paging hierarchy at EPTP 0x{eptp:08X}...')
         if pt_fname is None:
             pt_fname = (f'ept_{eptp:08X}')
-        logger().set_log_file(pt_fname)
+        logger().set_log_file(pt_fname, False)
         paging_ept.read_pt_and_show_status(pt_fname, 'EPT', eptp)
-        logger().set_log_file(_orig_logname)
+        logger().set_log_file(_orig_logname, False)
         if paging_ept.failure:
             logger().log_error('Could not dump EPT page tables')
 

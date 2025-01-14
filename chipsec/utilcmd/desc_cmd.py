@@ -49,10 +49,9 @@ Examples:
 >>> chipsec_util ldt
 """
 
-from time import time
 from argparse import ArgumentParser
 
-from chipsec.command import BaseCommand
+from chipsec.command import BaseCommand, toLoad
 
 # CPU descriptor tables
 
@@ -67,22 +66,22 @@ class IDTCommand(BaseCommand):
     >>> chipsec_util idt
     """
 
-    def requires_driver(self):
+    def requirements(self) -> toLoad:
+        return toLoad.Driver
+    
+    def parse_arguments(self) -> None:
         parser = ArgumentParser(usage=IDTCommand.__doc__)
         parser.add_argument('_thread', metavar='thread', type=lambda x: int(x, 0), nargs='?', default=None, help="thread")
-        parser.parse_args(self.argv[2:], namespace=self)
-        return True
+        parser.parse_args(self.argv, namespace=self)
 
-    def run(self):
-        t = time()
+    def run(self) -> None:
         num_threads = self.cs.msr.get_cpu_thread_count()
         if self._thread and self._thread < num_threads:
-            self.logger.log("[CHIPSEC] Dumping IDT of CPU thread {:d}".format(self._thread))
+            self.logger.log(f'[CHIPSEC] Dumping IDT of CPU thread {self._thread:d}')
             self.cs.msr.IDT(self._thread, 4)
         else:
-            self.logger.log("[CHIPSEC] Dumping IDT of {:d} CPU threads".format(num_threads))
+            self.logger.log(f'[CHIPSEC] Dumping IDT of {num_threads:d} CPU threads')
             self.cs.msr.IDT_all(4)
-        self.logger.log("[CHIPSEC] (idt) time elapsed {:.3f}".format(time() - t))
 
 
 class GDTCommand(BaseCommand):
@@ -95,22 +94,22 @@ class GDTCommand(BaseCommand):
     >>> chipsec_util gdt
     """
 
-    def requires_driver(self):
+    def requirements(self) -> toLoad:
+        return toLoad.Driver
+    
+    def parse_arguments(self) -> None:
         parser = ArgumentParser(usage=GDTCommand.__doc__)
         parser.add_argument('_thread', metavar='thread', type=lambda x: int(x, 0), nargs='?', default=None, help="thread")
-        parser.parse_args(self.argv[2:], namespace=self)
-        return True
+        parser.parse_args(self.argv, namespace=self)
 
-    def run(self):
-        t = time()
+    def run(self) -> None:
         num_threads = self.cs.msr.get_cpu_thread_count()
         if self._thread and self._thread < num_threads:
-            self.logger.log("[CHIPSEC] Dumping IDT of CPU thread {:d}".format(self._thread))
+            self.logger.log(f'[CHIPSEC] Dumping IDT of CPU thread {self._thread:d}')
             self.cs.msr.GDT(self._thread, 4)
         else:
-            self.logger.log("[CHIPSEC] Dumping IDT of {:d} CPU threads".format(num_threads))
+            self.logger.log(f'[CHIPSEC] Dumping IDT of {num_threads:d} CPU threads')
             self.cs.msr.GDT_all(4)
-        self.logger.log("[CHIPSEC] (gdt) time elapsed {:.3f}".format(time() - t))
 
 
 class LDTCommand(BaseCommand):
@@ -123,10 +122,13 @@ class LDTCommand(BaseCommand):
     >>> chipsec_util ldt
     """
 
-    def requires_driver(self):
-        return True
+    def requirements(self) -> toLoad:
+        return toLoad.Nil
+    
+    def parse_arguments(self) -> None:
+        return
 
-    def run(self):
+    def run(self) -> None:
         self.logger.log_error("[CHIPSEC] ldt not implemented")
 
 

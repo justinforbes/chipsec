@@ -43,7 +43,8 @@ Examples:
 
 """
 
-from chipsec.module_common import BaseModule, ModuleResult
+from chipsec.module_common import BaseModule
+from chipsec.library.returncode import ModuleResult
 from chipsec.hal.vmm import VMM
 
 EVENT_CHANNEL_OP = 32
@@ -51,6 +52,10 @@ EVTCHOP_INIT_CONTROL = 11
 
 
 class xsa188(BaseModule):
+    def __init__(self):
+        BaseModule.__init__(self)
+        self.result.url = 'https://chipsec.github.io/modules/chipsec.modules.tools.vmm.xen.xsa188.html'
+
     def run(self, module_argv):
         self.logger.start_test('Xen XSA-188 PoC check')
         (args_va, args_pa) = self.cs.mem.alloc_physical_mem(0x1000, 0xFFFFFFFFFFFFFFFF)
@@ -62,5 +67,6 @@ class xsa188(BaseModule):
 
         self.logger.log_information('Module completed')
         self.logger.log_warning('System may be in an unknown state, further evaluation may be needed.')
-        self.res = ModuleResult.WARNING
+        self.result.setStatusBit(self.result.status.POTENTIALLY_VULNERABLE)
+        self.res = self.result.getReturnCode(ModuleResult.WARNING)
         return self.res

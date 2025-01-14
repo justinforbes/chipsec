@@ -77,7 +77,8 @@ If in doubt, follow the existing code style and formatting.
 
         # Good
         import sys
-        from chipsec.module_common import BaseModule, ModuleResult
+        from chipsec.module_common import BaseModule
+        from chipsec.library.returncode import ModuleResult
 
         # Bad - using '*' and importing sys after local imports
         import *
@@ -233,6 +234,11 @@ f-Strings
      - f-strings support = for self-documenting expressions
      - 3.8
      - No
+   * - `PEP 701 <https://www.python.org/dev/peps/pep-0701/>`_
+     - Syntactic formalization of f-strings
+     - Lift some restrictions from PEP 498 and formalize grammar for f-strings
+     - 3.12
+     - No
 
 
 Type Hints
@@ -348,6 +354,16 @@ This table lists which Type Hint PEPs are in scope for CHIPSEC.
      - A new syntax for specifying kwargs type as a TypedDict without breaking current behavior
      - 3.12
      - No
+   * - `PEP 695 <https://www.python.org/dev/peps/pep-0695/>`_
+     - Type Parameter Syntax
+     - A syntax for specifying type parameters within a generic class, function, or type alias. And introduces a new statement for declaring type aliases.
+     - 3.12
+     - No
+   * - `PEP 698 <https://www.python.org/dev/peps/pep-0698/>`_
+     - Override Decorator for Static Typing
+     - Adds @override decorator to allow type checkers to prevent a class of bugs that occur when a base class changes methods that are inherited by derived classes.
+     - 3.12
+     - No
 
 
 Underscores in Numeric Literals
@@ -390,3 +406,33 @@ At this time, Assignment Expressions (Walrus operator) are not supported.
      - Adds a way to assign to variables within an expression
      - 3.8
      - No
+
+
+Deprecate distutils module support
+==================================
+
+Python 3.12 will deprecate and remove the distutils module.  In order for CHIPSEC to support this and furture versions of Python, setuptools should be used instead of distutils.
+
+The setuptools module has been updated to fully replace distutils but requires an up-to-date version.
+
+- Minimum setuptools version: `62.0.0 <https://pypi.org/project/setuptools/62.0.0/>`_ (requires Python >= 3.8)
+
+- Recommended setuptools version: latest
+
+**Note**: If you get any `setuptools.command.build` errors, verify that you have (at least) the minimum setuptools version.
+
+.. list-table:: PEP versions supported by CHIPSEC
+   :widths: 12 23 25 12 12
+   :header-rows: 1
+
+   * - PEP / bpo
+     - Title
+     - Summary
+     - Python Version
+     - Supported
+   * - `PEP 632 <https://peps.python.org/pep-0632/>`_
+     - Deprecate distutils module
+     - Mark the distutils module as deprecated (3.10) and then remove it (3.12)
+     - 3.12
+     - Yes
+

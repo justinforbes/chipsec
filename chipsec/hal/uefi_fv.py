@@ -24,11 +24,11 @@ UEFI Firmware Volume Parsing/Modification Functionality
 
 import hashlib
 import struct
-from typing import Optional
+from typing import Optional, Tuple
 from uuid import UUID
-from chipsec.defines import bytestostring
+from chipsec.library.defines import bytestostring
 from chipsec.hal.uefi_common import get_3b_size, bit_set, align
-from chipsec.logger import logger
+from chipsec.library.logger import logger
 
 ################################################################################################
 #
@@ -152,6 +152,7 @@ EFI_FIRMWARE_FILE_SYSTEM3_GUID = UUID("5473C07A-3DCB-4DCA-BD6F-1E9689E7349A")
 
 EFI_FS_GUIDS = [EFI_FIRMWARE_FILE_SYSTEM3_GUID, EFI_FIRMWARE_FILE_SYSTEM2_GUID, EFI_FIRMWARE_FILE_SYSTEM_GUID]
 
+LZMAF86_DECOMPRESS_GUID = UUID('D42AE6BD-1352-4BFB-909A-CA72A6EAE889')
 LZMA_CUSTOM_DECOMPRESS_GUID = UUID("EE4E5898-3914-4259-9D6E-DC7BD79403CF")
 TIANO_DECOMPRESSED_GUID = UUID("A31280AD-481E-41B6-95E8-127F4C984779")
 
@@ -163,15 +164,15 @@ DEF_INDENT = "    "
 
 
 class EFI_MODULE:
-    def __init__(self, Offset, Guid, HeaderSize, Attributes, Image):
+    def __init__(self, Offset: int, Guid: Optional[UUID], HeaderSize: int, Attributes: int, Image: bytes):
         self.Offset = Offset
         self.Guid = Guid
         self.HeaderSize = HeaderSize
         self.Attributes = Attributes
         self.Image = Image
-        self.ui_string = None
+        self.ui_string = ''
         self.isNVRAM = False
-        self.NVRAMType = None
+        self.NVRAMType = ''
 
         self.indent = ''
 
@@ -182,24 +183,24 @@ class EFI_MODULE:
         # a list of children EFI_MODULE nodes to build the EFI_MODULE object model
         self.children = []
 
-    def name(self):
+    def name(self) -> str:
         _name = type(self).__name__.encode('ascii', 'ignore')
         _guid = str(self.Guid).upper()
         _ui_str = self.ui_string.encode('ascii', 'ignore') if self.ui_string else ''
         return f'{_name} {{{_guid}}} {_ui_str}'
 
-    def __str__(self):
+    def __str__(self) -> str:
         _ind = self.indent + DEF_INDENT
         _s = ''
         if self.MD5:
-            _s = "\n{}MD5   : {}".format(_ind, self.MD5)
+            _s = f'\n{_ind}MD5   : {self.MD5}'
         if self.SHA1:
-            _s += "\n{}SHA1  : {}".format(_ind, self.SHA1)
+            _s += f'\n{_ind}SHA1  : {self.SHA1}'
         if self.SHA256:
-            _s += "\n{}SHA256: {}".format(_ind, self.SHA256)
+            _s += f'\n{_ind}SHA256: {self.SHA256}'
         return bytestostring(_s)
 
-    def calc_hashes(self, off=0):
+    def calc_hashes(self, off: int = 0) -> None:
         if self.Image is None:
             return
         hmd5 = hashlib.md5()
@@ -214,23 +215,23 @@ class EFI_MODULE:
 
 
 class EFI_FV(EFI_MODULE):
-    def __init__(self, Offset, Guid, Size, Attributes, HeaderSize, Checksum, ExtHeaderOffset, Image, CalcSum):
+    def __init__(self, Offset: int, Guid: UUID, Size: int, Attributes: int, HeaderSize: int, Checksum: int, ExtHeaderOffset: int, Image: bytes, CalcSum: int):
         super(EFI_FV, self).__init__(Offset, Guid, HeaderSize, Attributes, Image)
         self.Size = Size
         self.Checksum = Checksum
         self.ExtHeaderOffset = ExtHeaderOffset
         self.CalcSum = CalcSum
 
-    def __str__(self):
+    def __str__(self) -> str:
         schecksum = f'{self.Checksum:04X}h ({self.CalcSum:04X}h) *** checksum mismatch ***' if self.CalcSum != self.Checksum else f'{self.Checksum:04X}h'
-        _s = "\n{}{} +{:08X}h {{{}}}: ".format(self.indent, type(self).__name__, self.Offset, self.Guid)
+        _s = f'\n{self.indent}{type(self).__name__} +{self.Offset:08X}h {{{self.Guid}}}: '
         _s += f"Size {self.Size:08X}h, Attr {self.Attributes:08X}h, HdrSize {self.HeaderSize:04X}h, ExtHdrOffset {self.ExtHeaderOffset:08X}h, Checksum {schecksum}"
         _s += super(EFI_FV, self).__str__()
         return bytestostring(_s)
 
 
 class EFI_FILE(EFI_MODULE):
-    def __init__(self, Offset, Guid, Type, Attributes, State, Checksum, Size, Image, HeaderSize, UD, CalcSum):
+    def __init__(self, Offset: int, Guid: UUID, Type: int, Attributes: int, State: int, Checksum: int, Size: int, Image: bytes, HeaderSize: int, UD: bool, CalcSum: int):
         super(EFI_FILE, self).__init__(Offset, Guid, HeaderSize, Attributes, Image)
         self.Name = Guid
         self.Type = Type
@@ -240,86 +241,99 @@ class EFI_FILE(EFI_MODULE):
         self.UD = UD
         self.CalcSum = CalcSum
 
-    def __str__(self):
+    def __str__(self) -> str:
         schecksum = f'{self.Checksum:04X}h ({self.CalcSum:04X}h) *** checksum mismatch ***' if self.CalcSum != self.Checksum else f'{self.Checksum:04X}h'
-        _s = "\n{}+{:08X}h {}\n{}Type {:02X}h, Attr {:08X}h, State {:02X}h, Size {:06X}h, Checksum {}".format(
-            self.indent, self.Offset, self.name(), self.indent, self.Type, self.Attributes, self.State, self.Size, schecksum)
+        _s = f'\n{self.indent}+{self.Offset:08X}h {self.name()}\n{self.indent}Type {self.Type:02X}h, Attr {self.Attributes:08X}h, State {self.State:02X}h, Size {self.Size:06X}h, Checksum {schecksum}'
         _s += (super(EFI_FILE, self).__str__() + '\n')
         return bytestostring(_s)
 
 
 class EFI_SECTION(EFI_MODULE):
-    def __init__(self, Offset, Name, Type, Image, HeaderSize, Size):
-        super(EFI_SECTION, self).__init__(Offset, None, HeaderSize, None, Image)
+    def __init__(self, Offset: int, Name: str, Type: int, Image: bytes, HeaderSize: int, Size: int):
+        super(EFI_SECTION, self).__init__(Offset, None, HeaderSize, 0, Image)
         self.Name = Name
         self.Type = Type
-        self.DataOffset = None
-        self.Comments = None
+        self.DataOffset = 0
+        self.Comments = ''
         self.Size = Size
 
         # parent GUID used in search, export to JSON/log
         self.parentGuid = None
 
-    def name(self):
+    def name(self) -> str:
         _name = self.Name.encode('ascii', 'ignore')
         _guid = self.parentGuid
         _ui_str = self.ui_string.encode('ascii', 'ignore') if self.ui_string else ''
         return f'{_name} section of binary {{{_guid}}} {_ui_str}'
 
-    def __str__(self):
-        _s = "{}+{:08X}h {}: Type {:02X}h".format(self.indent, self.Offset, self.name(), self.Type)
+    def __str__(self) -> str:
+        _s = f'{self.indent}+{self.Offset:08X}h {self.name()}: Type {self.Type:02X}h'
         if self.Guid:
-            _s += " GUID {{{}}}".format(self.Guid)
+            _s += f' GUID {{{self.Guid}}}'
         if self.Attributes:
-            _s += " Attr {:04X}h".format(self.Attributes)
+            _s += f' Attr {self.Attributes:04X}h'
         if self.DataOffset:
-            _s += " DataOffset {:04X}h".format(self.DataOffset)
+            _s += f' DataOffset {self.DataOffset:04X}h'
         if self.Comments:
-            _s += "Comments {}".format(self.Comments)
+            _s += f' Comments {self.Comments}'
         _s += super(EFI_SECTION, self).__str__()
         return bytestostring(_s)
 
 
-def FvSum8(buffer):
+def FvSum8(buffer: bytes) -> int:
     sum8 = 0
     for b in bytestostring(buffer):
         sum8 = (sum8 + ord(b)) & 0xff
     return sum8
 
 
-def FvChecksum8(buffer):
+def FvChecksum8(buffer: bytes) -> int:
     return ((0x100 - FvSum8(buffer)) & 0xff)
 
 
-def FvSum16(buffer):
+def FvSum16(buffer: bytes) -> int:
     sum16 = 0
-    buffer = bytestostring(buffer)
+    buffer_str = bytestostring(buffer)
     blen = len(buffer) // 2
     i = 0
     while i < blen:
-        el16 = ord(buffer[2 * i]) | (ord(buffer[2 * i + 1]) << 8)
+        el16 = ord(buffer_str[2 * i]) | (ord(buffer_str[2 * i + 1]) << 8)
         sum16 = (sum16 + el16) & 0xffff
         i = i + 1
     return sum16
 
 
-def FvChecksum16(buffer):
+def FvChecksum16(buffer: bytes) -> int:
     return ((0x10000 - FvSum16(buffer)) & 0xffff)
 
 
-def ValidateFwVolumeHeader(ZeroVector, FsGuid, FvLength, HeaderLength, ExtHeaderOffset, Reserved, size, Calcsum, Checksum):
-    fv_rsvd = (Reserved == 0)
-    fv_len = (FvLength <= size)
+def ValidateFwVolumeHeader(FsGuid: UUID, FvLength: int, HeaderLength: int, ExtHeaderOffset: int, Reserved: int,
+                           size: int, Calcsum: int, Checksum: int) -> bool:
+    fv_rsvd = Reserved == 0
+    if not fv_rsvd:
+        logger().log_hal(f'WARNING: Firmware Volume {{{FsGuid}}} header has non-zero reserved values 0b{Reserved:b}')
+
+    fv_len = FvLength <= size
+    if not fv_len:
+        logger().log_hal(f'WARNING: Firmware Volume {{{FsGuid}}} data length 0x{FvLength:X} '
+                         f'exceeds total image length 0x{size:X}')
+
     fv_header_len = (ExtHeaderOffset < FvLength) and (HeaderLength < FvLength)
+    if not fv_header_len:
+        logger().log_hal(f'WARNING: Firmware Volume {{{FsGuid}}} header length 0x{HeaderLength:X} '
+                         f'exceeds or matches volume data length 0x{FvLength:X}')
+
     if Checksum != Calcsum:
-        logger().log_warning("Firmware Volume {{{}}} checksum does not match calculated checksum".format(FsGuid))
+        logger().log_hal(f'WARNING: Firmware Volume {{{FsGuid}}} checksum 0x{Checksum:X} '
+                         f'does not match calculated checksum 0x{Calcsum:X}')
+
     return fv_rsvd and fv_len and fv_header_len
 
 
-def NextFwVolume(buffer, off: int = 0, last_fv_size: int = 0) -> Optional[EFI_FV]:
+def NextFwVolume(buffer: bytes, off: int = 0, last_fv_size: int = 0) -> Optional[EFI_FV]:
     fof = off if last_fv_size == 0 else off + max(last_fv_size, EFI_FIRMWARE_VOLUME_HEADER_size)
     size = len(buffer)
-    while ((fof + EFI_FIRMWARE_VOLUME_HEADER_size) < size):
+    while (fof + EFI_FIRMWARE_VOLUME_HEADER_size) < size:
         fof = bytestostring(buffer).find("_FVH", fof)
         if fof == -1 or size - fof < EFI_FIRMWARE_VOLUME_HEADER_size:
             break
@@ -340,14 +354,15 @@ def NextFwVolume(buffer, off: int = 0, last_fv_size: int = 0) -> Optional[EFI_FV
             fvh = fvh + tail
         CalcSum = FvChecksum16(fvh)
         FsGuid = UUID(bytes_le=FileSystemGuid0)
-        if (ValidateFwVolumeHeader(ZeroVector, FsGuid, FvLength, HeaderLength, ExtHeaderOffset, Reserved, size, CalcSum, Checksum)):
-            return EFI_FV(fof, FsGuid, FvLength, Attributes, HeaderLength, Checksum, ExtHeaderOffset, buffer[fof:fof + FvLength], CalcSum)
+        FvImage = buffer[fof:fof + FvLength]
+        if ValidateFwVolumeHeader(FsGuid, FvLength, HeaderLength, ExtHeaderOffset, Reserved, len(FvImage), CalcSum, Checksum):
+            return EFI_FV(fof, FsGuid, FvLength, Attributes, HeaderLength, Checksum, ExtHeaderOffset, FvImage, CalcSum)
         else:
             fof += 0x2C
     return None
 
 
-def GetFvHeader(buffer, off=0):
+def GetFvHeader(buffer: bytes, off: int = 0) -> Tuple[int, int, int]:
     EFI_FV_BLOCK_MAP_ENTRY_SZ = struct.calcsize(EFI_FV_BLOCK_MAP_ENTRY)
     header_size = EFI_FIRMWARE_VOLUME_HEADER_size + struct.calcsize(EFI_FV_BLOCK_MAP_ENTRY)
     if (len(buffer) < header_size):
@@ -355,43 +370,41 @@ def GetFvHeader(buffer, off=0):
     size = 0
     fof = off + EFI_FIRMWARE_VOLUME_HEADER_size
     ZeroVector, FileSystemGuid0, \
-        FvLength, Signature, Attributes, HeaderLength, Checksum, ExtHeaderOffset,    \
+        FvLength, _, Attributes, HeaderLength, Checksum, ExtHeaderOffset,    \
         Reserved, Revision = struct.unpack(EFI_FIRMWARE_VOLUME_HEADER, buffer[off:off + EFI_FIRMWARE_VOLUME_HEADER_size])
     numblocks, lenblock = struct.unpack(EFI_FV_BLOCK_MAP_ENTRY, buffer[fof:fof + struct.calcsize(EFI_FV_BLOCK_MAP_ENTRY)])
-    if logger().HAL:
-        logger().log('{}'.format(
-            '''
-        \nFV volume offset: 0x{:08X}
-        \tFvLength:         0x{:08X}
-        \tAttributes:       0x{:08X}
-        \tHeaderLength:     0x{:04X}
-        \tChecksum:         0x{:04X}
-        \tRevision:         0x{:02X}
-        \tExtHeaderOffset:  0x{:02X}
-        \tReserved:         0x{:02X}
-        FFS Guid:    {}
-        '''.format(fof, FvLength, Attributes, HeaderLength, Checksum, Revision, ExtHeaderOffset, Reserved, UUID(bytes_le=FileSystemGuid0))
-        ))
+    fv_header_str = f'''
+    \nFV volume offset: 0x{fof:08X}
+    \tFvLength:         0x{FvLength:08X}
+    \tAttributes:       0x{Attributes:08X}
+    \tHeaderLength:     0x{HeaderLength:04X}
+    \tChecksum:         0x{Checksum:04X}
+    \tRevision:         0x{Revision:02X}
+    \tExtHeaderOffset:  0x{ExtHeaderOffset:02X}
+    \tReserved:         0x{Reserved:02X}
+    FFS Guid:    {UUID(bytes_le=FileSystemGuid0)}
+    '''
+    logger().log_hal(fv_header_str)
+
     while not (numblocks == 0 and lenblock == 0):
         fof += EFI_FV_BLOCK_MAP_ENTRY_SZ
         if (fof + EFI_FV_BLOCK_MAP_ENTRY_SZ) >= len(buffer):
             return (0, 0, 0)
         if numblocks != 0:
-            if logger().HAL:
-                logger().log("Num blocks:   0x{:08X}\n".format(numblocks))
-                logger().log("block Len:    0x{:08X}\n".format(lenblock))
+            logger().log_hal(f'Num blocks:   0x{numblocks:08X}\n')
+            logger().log_hal(f'block Len:    0x{lenblock:08X}\n')
             size = size + (numblocks * lenblock)
         numblocks, lenblock = struct.unpack(EFI_FV_BLOCK_MAP_ENTRY, buffer[fof:fof + EFI_FV_BLOCK_MAP_ENTRY_SZ])
     if FvLength != size:
-        logger().log("ERROR: Volume Size not consistent with Block Maps")
+        logger().log_hal("ERROR: Volume Size not consistent with Block Maps")
         return (0, 0, 0)
     if size >= 0x40000000 or size == 0:
-        logger().log("ERROR: Volume is corrupted")
+        logger().log_hal("ERROR: Volume is corrupted")
         return (0, 0, 0)
     return (size, HeaderLength, Attributes)
 
 
-def NextFwFile(FvImage, FvLength, fof, polarity):
+def NextFwFile(FvImage: bytes, FvLength: int, fof: int, polarity: bool) -> Optional[EFI_FILE]:
     file_header_size = struct.calcsize(EFI_FFS_FILE_HEADER)
     fof = align(fof, 8)
     cur_offset = fof
@@ -427,11 +440,11 @@ def NextFwFile(FvImage, FvLength, fof, polarity):
 
         # Validate fsize is a legal value
         if fsize == 0 or fsize > FvLength - cur_offset:
-            logger().log("Unable to get correct file size for NextFwFile corrupt header information")
+            logger().log_hal("WARNING: Unable to get correct file size for NextFwFile corrupt header information")
             break
         # Get next_offset
         update_or_deleted = (bit_set(State, EFI_FILE_MARKED_FOR_UPDATE, polarity)) or (bit_set(State, EFI_FILE_DELETED, polarity))
-        if not((bit_set(State, EFI_FILE_DATA_VALID, polarity)) or update_or_deleted):
+        if not ((bit_set(State, EFI_FILE_DATA_VALID, polarity)) or update_or_deleted):
             # else:
             cur_offset = align(cur_offset + 1, 8)
             continue
@@ -450,7 +463,7 @@ def NextFwFile(FvImage, FvLength, fof, polarity):
     return res
 
 
-def NextFwFileSection(sections, ssize, sof, polarity):
+def NextFwFileSection(sections: bytes, ssize: int, sof: int, polarity: bool) -> Optional[EFI_SECTION]:
     EFI_COMMON_SECTION_HEADER_size = struct.calcsize(EFI_COMMON_SECTION_HEADER)
     res = None
     curr_offset = sof
@@ -467,7 +480,7 @@ def NextFwFileSection(sections, ssize, sof, polarity):
         if Type in SECTION_NAMES.keys():
             sec_name = SECTION_NAMES[Type]
         else:
-            sec_name = "S_UNKNOWN_{:02X}".format(Type)
+            sec_name = f'S_UNKNOWN_{Type:02X}'
         if (Size == 0xffffff and Type == 0xff) or (Size == 0):
             curr_offset = align(curr_offset + 4, 4)
             continue
@@ -483,20 +496,20 @@ def NextFwFileSection(sections, ssize, sof, polarity):
 # #################################################################################################
 
 
-def align_image(image, size=8, fill='\x00'):
-    return image.ljust(((len(image) + size - 1) / size) * size, fill)
+def align_image(image: bytes, size: int = 8, fill: bytes = b'\x00') -> bytes:
+    return image.ljust(((len(image) + size - 1) // size) * size, fill)
 
 
-def get_guid_bin(guid):
-    values = guid.split('-')
+def get_guid_bin(guid: UUID) -> bytes:
+    values = str(guid).split('-')
     if [len(x) for x in values] == [8, 4, 4, 4, 12]:
         values = values[0:3] + [values[3][0:2], values[3][2:4]] + [values[4][x:x + 2] for x in range(0, 12, 2)]
         values = [int(x, 16) for x in values]
         return struct.pack('<LHHBBBBBBBB', *tuple(values))
-    return ''
+    return b''
 
 
-def assemble_uefi_file(guid, image):
+def assemble_uefi_file(guid: UUID, image: bytes) -> bytes:
     EFI_FFS_FILE_HEADER = "<16sHBBL"
     FileHeaderSize = struct.calcsize(EFI_FFS_FILE_HEADER)
 
@@ -519,7 +532,7 @@ def assemble_uefi_file(guid, image):
     return struct.pack(EFI_FFS_FILE_HEADER, get_guid_bin(guid), CheckSum, Type, Attributes, SizeState) + image
 
 
-def assemble_uefi_section(image, uncomressed_size, compression_type):
+def assemble_uefi_section(image: bytes, uncomressed_size: int, compression_type: int) -> bytes:
     EFI_COMPRESSION_SECTION_HEADER = "<LLB"
     SectionType = EFI_SECTION_COMPRESSION
     SectionSize = struct.calcsize(EFI_COMPRESSION_SECTION_HEADER) + len(image)
@@ -527,9 +540,9 @@ def assemble_uefi_section(image, uncomressed_size, compression_type):
     return SectionHeader + image
 
 
-def assemble_uefi_raw(image):
+def assemble_uefi_raw(image: bytes) -> bytes:
     return align_image(struct.pack('<L', ((len(image) + 4) & 0x00FFFFFF) + (EFI_SECTION_RAW << 24)) + image)
 
 
-def DecodeSection(SecType, SecBody, SecHeaderSize):
+def DecodeSection(SecType, SecBody, SecHeaderSize) -> None:
     pass

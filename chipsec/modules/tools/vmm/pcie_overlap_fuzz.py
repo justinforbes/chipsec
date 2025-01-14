@@ -35,7 +35,7 @@ Additional options set within the module:
     - ``FUZZ_OVERLAP``       : Set for fuzz overlaps
     - ``FUZZ_RANDOM``        : Set to fuzz in random mode
     - ``_EXCLUDE_MMIO_BAR1`` : List 1 of MMIO bars to exclude
-    - ``_EXCLUDE_MMIO_BAR2`` : List 2 of MMIO bars to exclude 
+    - ``_EXCLUDE_MMIO_BAR2`` : List 2 of MMIO bars to exclude
 
 .. note::
     - Returns a Warning by default
@@ -49,7 +49,8 @@ Additional options set within the module:
 
 import random
 
-from chipsec.module_common import BaseModule, ModuleResult
+from chipsec.module_common import BaseModule
+from chipsec.library.returncode import ModuleResult
 from chipsec.hal.pci import print_pci_devices
 
 #################################################################
@@ -65,6 +66,8 @@ _EXCLUDE_MMIO_BAR2 = []
 
 
 class pcie_overlap_fuzz(BaseModule):
+    def __init__(self):
+        BaseModule.__init__(self)
 
     def overlap_mmio_range(self, bus1, dev1, fun1, is64bit1, off1, bus2, dev2, fun2, is64bit2, off2, direction):
         base_lo1 = self.cs.pci.read_dword(bus1, dev1, fun1, off1)
@@ -109,7 +112,7 @@ class pcie_overlap_fuzz(BaseModule):
         self.cs.mem.write_physical_mem_byte(bar + reg_off + 1, 0xFF)
 
     def fuzz_mmio_bar(self, bar, is64bit, size=0x1000):
-        self.logger.log("[*] Fuzzing MMIO BAR 0x{:016X}, size = 0x{:X}..".format(bar, size))
+        self.logger.log(f'[*] Fuzzing MMIO BAR 0x{bar:016X}, size = 0x{size:X}..')
         reg_off = 0
         # Issue 32b MMIO requests with various values to all MMIO registers
         for reg_off in range(0, size, 4):
@@ -120,7 +123,7 @@ class pcie_overlap_fuzz(BaseModule):
             self.cs.mmio.write_MMIO_reg(bar, reg_off, reg_value)
 
     def fuzz_mmio_bar_random(self, bar, is64bit, size=0x1000):
-        self.logger.log("[*] Fuzzing MMIO BAR in random mode 0x{:016X}, size = 0x{:X}..".format(bar, size))
+        self.logger.log(f'[*] Fuzzing MMIO BAR in random mode 0x{bar:016X}, size = 0x{size:X}..')
         reg_off = 0
         while 1:
             rand = random.randint(0, size / 4 - 1)
@@ -129,8 +132,8 @@ class pcie_overlap_fuzz(BaseModule):
             self.fuzz_unaligned(bar, rand * 4, is64bit)
 
     def fuzz_overlap_pcie_device(self, pcie_devices):
-        for (b1, d1, f1, _, _) in pcie_devices:
-            self.logger.log("[*] Overlapping MMIO bars...")
+        for (b1, d1, f1, _, _, _) in pcie_devices:
+            self.logger.log('[*] Overlapping MMIO bars...')
             device_bars1 = self.cs.pci.get_device_bars(b1, d1, f1, bCalcSize=True)
             for (bar1, isMMIO1, is64bit1, bar_off1, _, size1) in device_bars1:
                 if bar1 not in _EXCLUDE_MMIO_BAR1:
@@ -141,31 +144,31 @@ class pcie_overlap_fuzz(BaseModule):
                                 if bar2 not in _EXCLUDE_MMIO_BAR2:
                                     if isMMIO2:
                                         if bar1 != bar2:
-                                            values = (b1, d1, f1, bar_off1, bar1, b2, d2, f2, bar_off2, bar2)
-                                            self.logger.log("[*] Overlap device {:02X}:{:02X}.{:X} offset {:X} bar: {:08X} and {:02X}:{:02X}.{:X} offset {:X} bar: {:08X}".format(*values))
+                                            self.logger.log(f'[*] Overlap device {b1:02X}:{d1:02X}.{f1:X} offset {bar_off1:X} bar: {bar1:08X} and {b2:02X}:{d2:02X}.{f2:X} offset {bar_off2:X} bar: {bar2:08X}')
                                             self.overlap_mmio_range(b1, d1, f1, is64bit1, bar_off1, b2, d2, f2, is64bit2, bar_off2, OVERLAP_MODE)
                                             if FUZZ_OVERLAP:
                                                 _bar = bar1 if OVERLAP_MODE else bar2
                                                 _is64bit = is64bit1 if OVERLAP_MODE else is64bit2
                                                 _size = size1 if OVERLAP_MODE else size2
-                                                self.logger.log("[*] Fuzzing MMIO BAR 0x{:X}...".format(_bar))
+                                                self.logger.log(f'[*] Fuzzing MMIO BAR 0x{_bar:X}...')
                                                 if FUZZ_RANDOM:
                                                     self.fuzz_mmio_bar_random(_bar, _is64bit, _size)
                                                 else:
                                                     self.fuzz_mmio_bar(_bar, _is64bit, _size)
 
     def run(self, module_argv):
-        self.logger.start_test("Tool to overlap and fuzz MMIO spaces of available PCIe devices")
+        self.logger.start_test('Tool to overlap and fuzz MMIO spaces of available PCIe devices')
 
         pcie_devices = []
-        self.logger.log("[*] Enumerating available PCIe devices..")
+        self.logger.log('[*] Enumerating available PCIe devices..')
         pcie_devices = self.cs.pci.enumerate_devices()
 
-        self.logger.log("[*] About to fuzz the following PCIe devices..")
+        self.logger.log('[*] About to fuzz the following PCIe devices..')
         print_pci_devices(pcie_devices)
         self.fuzz_overlap_pcie_device(pcie_devices)
 
         self.logger.log_information('Module completed!')
         self.logger.log_warning('System may be in an unknown state, further evaluation may be needed.')
-        self.res = ModuleResult.WARNING
+        self.result.setStatusBit(self.result.status.VERIFY)
+        self.res = self.result.getReturnCode(ModuleResult.WARNING)
         return self.res

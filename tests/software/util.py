@@ -21,9 +21,7 @@ import unittest
 from tests.software import mock_helper
 
 import chipsec_util
-from chipsec import logger
 from chipsec import chipset
-from chipsec.helper import oshelper
 
 
 class TestChipsecUtil(unittest.TestCase):
@@ -55,11 +53,10 @@ class TestChipsecUtil(unittest.TestCase):
         It verifies that no error is being reported. self.log will be populated
         with the output.
         """
-        chipsec_util._cs = chipset.cs()
-        chipsec_util._cs.helper.helper = helper_class()
         args = arg.split()
         par = chipsec_util.parse_args(args)
         util = chipsec_util.ChipsecUtil(par, args)
+        util._helper = helper_class()
         util.logger.VERBOSE = True
         util.logger.HAL = True
         util.logger.set_log_file(self.log_file)
@@ -78,4 +75,4 @@ class TestChipsecUtil(unittest.TestCase):
         expression: name [:=] value.
         """
         exp = r'(^|\W){}\s*[:=]\s*{}($|\W)'.format(name, value)
-        self.assertRegexpMatches(self.log, exp.encode())
+        self.assertRegex(self.log, exp.encode())

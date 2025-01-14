@@ -16,12 +16,13 @@
 #
 import unittest
 
-from chipsec.exceptions import UnknownChipsetError
+from chipsec.library.exceptions import UnknownChipsetError
+from chipsec.config import CHIPSET_CODE_UNKNOWN
 from tests.software import cs
 from tests.software import mock_helper
 
 
-class TestPlatformChipsecCs(cs.TestChipsecCs):
+class TestPlatformChipsecCs(cs.TestChipsecCs, unittest.TestCase):
     """Test the platform commands exposed by chipsec chipset."""
 
     def test_platform(self):
@@ -33,19 +34,16 @@ class TestPlatformChipsecCs(cs.TestChipsecCs):
         self.assertEqual('CML', p)
 
     def test_platform_invalid(self):
-        try:
-            p = self._chipsec_cs("get_chipset_code", mock_helper.InvalidChipsetHelper)
-            self.assertTrue(False)
-        except UnknownChipsetError:
-            self.assertTrue(True)
+        self.assertRaises(UnknownChipsetError, self._chipsec_cs, "get_chipset_code", mock_helper.InvalidChipsetHelper)
+        # self.assertEqual(CHIPSET_CODE_UNKNOWN, p)
 
     def test_pch(self):
         p = self._chipsec_cs("get_pch_code", mock_helper.ValidChipsetHelper)
-        self.assertEqual('PCH_1xx', p)
+        self.assertEqual('PCH_1XX', p)
 
     def test_pch_invalid(self):
         p = self._chipsec_cs("get_pch_code", mock_helper.InvalidPchHelper)
-        self.assertEqual('', p)
+        self.assertEqual(CHIPSET_CODE_UNKNOWN, p)
 
     def test_pch_given(self):
         p = self._chipsec_cs("get_pch_code", mock_helper.InvalidPchHelper, None, 'PCH_495')

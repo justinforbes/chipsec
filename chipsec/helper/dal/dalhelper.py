@@ -28,25 +28,29 @@ From the Intel(R) DFx Abstraction Layer Python* Command Line Interface User Guid
 
 import struct
 
-from chipsec.logger import logger
-import itpii
-from ctypes import *
+from chipsec.library.logger import logger
+try:
+    import itpii
+except:
+    pass
+from ctypes import c_char
+from typing import Optional, Tuple, TYPE_CHECKING
+if TYPE_CHECKING:
+    from ctypes import Array
 from chipsec.helper.basehelper import Helper
-from chipsec.exceptions import DALHelperError
-
-SYSTEM_HALTED = True
+from chipsec.library.exceptions import DALHelperError, UnimplementedAPIError
 
 
 class DALHelper(Helper):
     def __init__(self):
         super(DALHelper, self).__init__()
         self.base = itpii.baseaccess()
-        if logger().DEBUG:
-            logger().log('[helper] DAL Helper')
+        self.is_system_halted = True
+        logger().log_debug('[helper] DAL Helper')
         if not len(self.base.threads):
             logger().log('[helper] No threads detected!  DAL Helper will fail to load!')
         elif self.base.threads[self.find_thread()].cv.isrunning:
-            SYSTEM_HALTED = False
+            self.is_system_halted = False
             self.base.halt()
         self.os_system = '(Via Intel DAL)'
         self.os_release = '(N/A)'
@@ -57,7 +61,7 @@ class DALHelper(Helper):
     def __del__(self):
         if not len(self.base.threads):
             logger().log('[helper] No threads detected!')
-        elif not SYSTEM_HALTED:
+        elif not self.is_system_halted:
             logger().log('[helper] Threads are halted')
         else:
             self.base.go()
@@ -68,31 +72,26 @@ class DALHelper(Helper):
 # Driver/service management functions
 ###############################################################################################
 
-
-    def create(self, start_driver):
-        if logger().DEBUG:
-            logger().log('[helper] DAL Helper created')
+    def create(self, start_driver: bool) -> bool:
+        logger().log_debug('[helper] DAL Helper created')
         return True
 
-    def start(self, start_driver, driver_exhists=False):
+    def start(self, start_driver: bool, driver_exhists: bool = False) -> bool:
         self.driver_loaded = True
         if self.base.threads[self.find_thread()].cv.isrunning:
             self.base.halt()
-            SYSTEM_HALTED = False
-        if logger().DEBUG:
-            logger().log('[helper] DAL Helper started/loaded')
+            self.is_system_halted = False
+        logger().log_debug('[helper] DAL Helper started/loaded')
         return True
 
-    def stop(self, start_driver):
-        if not SYSTEM_HALTED:
+    def stop(self) -> bool:
+        if not self.is_system_halted:
             self.base.go()
-        if logger().DEBUG:
-            logger().log('[helper] DAL Helper stopped/unloaded')
+        logger().log_debug('[helper] DAL Helper stopped/unloaded')
         return True
 
-    def delete(self, start_driver):
-        if logger().DEBUG:
-            logger().log('[helper] DAL Helper deleted')
+    def delete(self) -> bool:
+        logger().log_debug('[helper] DAL Helper deleted')
         return True
 
 
@@ -100,20 +99,18 @@ class DALHelper(Helper):
 # Functions to get information about the remote target
 ###############################################################################################
 
+    def target_machine(self) -> str:
+        return f'{self.base.devicelist[0].devicetype}-{self.base.devicelist[0].stepping}'
 
-    def target_machine(self):
-        return self.base.devicelist[0].devicetype + '-' + self.base.devicelist[0].stepping
-
-    def dal_version(self):
+    def dal_version(self) -> str:
         return self.base.cv.version
 
     # return first enabled thread
-    def find_thread(self):
+    def find_thread(self) -> int:
         for en_thread in range(len(self.base.threads)):
             if self.base.threads[en_thread].isenabled:
                 return en_thread
-        if logger().DEBUG:
-            logger().log('[WARNING] No enabled threads found.')
+        logger().log_debug('[WARNING] No enabled threads found.')
         return 0
 
 ###############################################################################################
@@ -124,10 +121,9 @@ class DALHelper(Helper):
     # PCIe configuration access
     #
 
-    def pci_addr(self, bus, device, function, offset):
+    def pci_addr(self, bus: int, device: int, function: int, offset: int) -> int:
         if (bus >= 256) or (device >= 32) or (function >= 8) or (offset >= 256):
-            if logger().DEBUG:
-                logger().log('[WARNING] PCI access out of range. Use mmio functions to access PCIEXBAR.')
+            logger().log_debug('[WARNING] PCI access out of range. Use mmio functions to access PCIEXBAR.')
         config_addr = self.base.threads[self.find_thread()].dport(0xCF8)
         config_addr &= 0x7f000003
         config_addr |= 0x80000000
@@ -137,7 +133,7 @@ class DALHelper(Helper):
         config_addr |= (offset & 0xFF) << 0
         return config_addr
 
-    def read_pci_reg(self, bus, device, function, address, size):
+    def read_pci_reg(self, bus: int, device: int, function: int, address: int, size: int) -> int:
         ie_thread = self.find_thread()
         self.base.threads[ie_thread].dport(0xCF8, self.pci_addr(bus, device, function, address))
         value = (self.base.threads[ie_thread].dport(0xCFC) >> ((address % 4) * 8))
@@ -147,7 +143,7 @@ class DALHelper(Helper):
             value &= 0xFFFF
         return value.ToUInt32()
 
-    def write_pci_reg(self, bus, device, function, address, dword_value, size):
+    def write_pci_reg(self, bus: int, device: int, function: int, address: int, dword_value: int, size: int) -> int:
         ie_thread = self.find_thread()
         self.base.threads[ie_thread].dport(0xCF8, self.pci_addr(bus, device, function, address))
         old_value = self.base.threads[ie_thread].dport(0xCFC)
@@ -158,7 +154,7 @@ class DALHelper(Helper):
     # Physical memory access
     #
 
-    def read_physical_mem(self, phys_address, length, bytewise=False):
+    def read_phys_mem(self, phys_address: int, length: int, bytewise: bool = False) -> bytes:
         if bytewise:
             width = 1
         else:
@@ -172,9 +168,9 @@ class DALHelper(Helper):
                 struct.pack_into(format[width], out_buf, ptr, v.ToUInt64())
                 ptr += width
             width = width // 2
-        return ''.join(out_buf)
+        return b''.join(out_buf)
 
-    def write_physical_mem(self, phys_address, length, buf, bytewise=False):
+    def write_phys_mem(self, phys_address: int, length: int, buf: bytes, bytewise: bool = False) -> int:
         if bytewise:
             width = 1
         else:
@@ -187,20 +183,22 @@ class DALHelper(Helper):
                 self.base.threads[self.find_thread()].mem(itpii.Address((phys_address + ptr), itpii.AddressType.physical), width, v[0])
                 ptr += width
             width = width // 2
-        return
+        return 1
 
-    def read_phys_mem(self, phys_address_hi, phys_address_lo, length):
-        return self.read_physical_mem((phys_address_hi << 32) | phys_address_lo, length)
+    def va2pa(self, va):
+        raise UnimplementedAPIError('va2pa')
 
-    def write_phys_mem(self, phys_address_hi, phys_address_lo, length, buf):
-        self.write_physical_mem((phys_address_hi << 32) | phys_address_lo, length, buf)
-        return
+    def alloc_phys_mem(self, length, max_phys_address):
+        raise UnimplementedAPIError('alloc_phys_mem')
+
+    def free_phys_mem(self, physical_address):
+        raise UnimplementedAPIError('free_phys_mem')
 
     #
     # CPU I/O port access
     #
 
-    def read_io_port(self, io_port, size):
+    def read_io_port(self, io_port: int, size: int) -> int:
         if size == 1:
             val = self.base.threads[self.find_thread()].port(io_port)
         elif size == 2:
@@ -211,47 +209,44 @@ class DALHelper(Helper):
             raise DALHelperError(size, 'is not a valid IO port size.')
         return val.ToUInt32()
 
-    def write_io_port(self, io_port, value, size):
+    def write_io_port(self, io_port: int, value: int, size: int) -> int:
         if size == 1:
-            self.base.threads[self.find_thread()].port(io_port, value)
+            ret = self.base.threads[self.find_thread()].port(io_port, value)
         elif size == 2:
-            self.base.threads[self.find_thread()].wport(io_port, value)
+            ret = self.base.threads[self.find_thread()].wport(io_port, value)
         elif size == 4:
-            self.base.threads[self.find_thread()].dport(io_port, value)
+            ret = self.base.threads[self.find_thread()].dport(io_port, value)
         else:
             raise DALHelperError(size, 'is not a valid IO port size.')
-        return
+        return ret
 
     #
     # CPU related API
     #
 
-    def read_msr(self, thread, msr_addr):
+    def read_msr(self, thread: int, msr_addr: int) -> Tuple[int, int]:
         if not self.base.threads[thread].isenabled:
             en_thread = self.find_thread()
-            if logger().DEBUG:
-                logger().log('[WARNING] Selected thread [{:d}] was disabled, using [{:d}].'.format(thread, en_thread))
+            logger().log_debug(f'[WARNING] Selected thread [{thread:d}] was disabled, using [{en_thread:d}].')
             thread = en_thread
         val = self.base.threads[thread].msr(msr_addr)
         edx = (val.ToUInt64() >> 32)
         eax = val.ToUInt64() & 0xffffffff
         return (eax, edx)
 
-    def write_msr(self, thread, msr_addr, eax, edx):
+    def write_msr(self, thread: int, msr_addr: int, eax: int, edx: int) -> int:
         if not self.base.threads[thread].isenabled:
             en_thread = self.find_thread()
-            if logger().DEBUG:
-                logger().log('[WARNING] Selected thread [{:d}] was disabled, using [{:d}].'.format(thread, en_thread))
+            logger().log_debug(f'[WARNING] Selected thread [{thread:d}] was disabled, using [{en_thread:d}].')
             thread = en_thread
         val = (edx << 32) | eax
         self.base.threads[thread].msr(msr_addr, val)
         return True
 
-    def read_cr(self, cpu_thread_id, cr_number):
+    def read_cr(self, cpu_thread_id: int, cr_number: int) -> int:
         if not self.base.threads[cpu_thread_id].isenabled:
             en_thread = self.find_thread()
-            if logger().DEBUG:
-                logger().log('[WARNING] Selected thread [{:d}] was disabled, using [{:d}].'.format(cpu_thread_id, en_thread))
+            logger().log_debug(f'[WARNING] Selected thread [{cpu_thread_id:d}] was disabled, using [{en_thread:d}].')
             cpu_thread_id = en_thread
         if cr_number == 0:
             val = self.base.threads[cpu_thread_id].state.regs.cr0.value
@@ -264,16 +259,14 @@ class DALHelper(Helper):
         elif cr_number == 8:
             val = self.base.threads[cpu_thread_id].state.regs.cr8.value
         else:
-            if logger().DEBUG:
-                logger().log('[ERROR] Selected CR{:d} is not supported.'.format(cr_number))
+            logger().log_debug(f'[ERROR] Selected CR{cr_number:d} is not supported.')
             val = 0
         return val
 
-    def write_cr(self, cpu_thread_id, cr_number, value):
+    def write_cr(self, cpu_thread_id: int, cr_number: int, value: int) -> int:
         if not self.base.threads[cpu_thread_id].isenabled:
             en_thread = self.find_thread()
-            if logger().DEBUG:
-                logger().log('[WARNING] Selected thread [{:d}] was disabled, using [{:d}].'.format(cpu_thread_id, en_thread))
+            logger().log_debug(f'[WARNING] Selected thread [{cpu_thread_id:d}] was disabled, using [{en_thread:d}].')
             cpu_thread_id = en_thread
         if cr_number == 0:
             self.base.threads[cpu_thread_id].state.regs.cr0 = value
@@ -286,23 +279,19 @@ class DALHelper(Helper):
         elif cr_number == 8:
             self.base.threads[cpu_thread_id].state.regs.cr8 = value
         else:
-            if logger().DEBUG:
-                logger().log('[ERROR] Selected CR{:d} is not supported.'.format(cr_number))
+            logger().log_debug(f'[ERROR] Selected CR{cr_number:d} is not supported.')
             return False
         return True
 
     def load_ucode_update(self, core_id, ucode_update_buf):
-        if logger().DEBUG:
-            logger().log_error("[DAL] API load_ucode_update() is not supported yet")
-        return False
+        raise UnimplementedAPIError('load_ucode_update')
 
-    def get_threads_count(self):
+    def get_threads_count(self) -> int:
         no_threads = len(self.base.threads)
-        if logger().DEBUG:
-            logger().log('[helper] Threads discovered : 0x{:X} ({:d})'.format(no_threads, no_threads))
+        logger().log_debug(f'[helper] Threads discovered : 0x{no_threads:X} ({no_threads:d})')
         return no_threads
 
-    def cpuid(self, eax, ecx):
+    def cpuid(self, eax: int, ecx: int) -> Tuple[int, int, int, int]:
         ie_thread = self.find_thread()
         reax = self.base.threads[ie_thread].cpuid_eax(eax, ecx)
         rebx = self.base.threads[ie_thread].cpuid_ebx(eax, ecx)
@@ -311,68 +300,39 @@ class DALHelper(Helper):
         return (reax, rebx, recx, redx)
 
     def get_descriptor_table(self, cpu_thread_id, desc_table_code):
-        if logger().DEBUG:
-            logger().log_error('[DAL] API get_descriptor_table() is not supported')
-        return None
+        raise UnimplementedAPIError('get_descriptor_table')
+
+    def retpoline_enabled(self) -> bool:
+        return False
 
     #
     # EFI Variable API
     #
 
-    def EFI_supported(self):
+    def EFI_supported(self) -> bool:
         return False
 
-    # Placeholders for EFI Variable API
-
     def delete_EFI_variable(self, name, guid):
-        if logger().DEBUG:
-            logger().log_error('[DAL] API delete_EFI_variable() is not supported')
-        return None
-
-    def native_delete_EFI_variable(self, name, guid):
-        if logger().DEBUG:
-            logger().log_error('[DAL] API native_delete_EFI_variable() is not supported')
-        return None
+        raise UnimplementedAPIError('delete_EFI_variable')
 
     def list_EFI_variables(self):
-        if logger().DEBUG:
-            logger().log_error('[DAL] API list_EFI_variables() is not supported')
-        return None
+        raise UnimplementedAPIError('list_EFI_variables')
 
-    def native_list_EFI_variables(self):
-        if logger().DEBUG:
-            logger().log_error('[DAL] API native_list_EFI_variables() is not supported')
-        return None
+    def get_EFI_variable(self, name, guid, attrs):
+        raise UnimplementedAPIError('get_EFI_variable')
 
-    def get_EFI_variable(self, name, guid, attrs=None):
-        if logger().DEBUG:
-            logger().log_error('[DAL] API get_EFI_variable() is not supported')
-        return None
-
-    def native_get_EFI_variable(self, name, guid, attrs=None):
-        if logger().DEBUG:
-            logger().log_error('[DAL] API native_get_EFI_variable() is not supported')
-        return None
-
-    def set_EFI_variable(self, name, guid, data, datasize, attrs=None):
-        if logger().DEBUG:
-            logger().log_error('[DAL] API set_EFI_variable() is not supported')
-        return None
-
-    def native_set_EFI_variable(self, name, guid, data, datasize, attrs=None):
-        if logger().DEBUG:
-            logger().log_error('[DAL] API native_set_EFI_variable() is not supported')
-        return None
+    def set_EFI_variable(self, name, guid, buffer, buffer_size, attrs):
+        raise UnimplementedAPIError('set_EFI_variable')
 
     #
     # Memory-mapped I/O (MMIO) access
     #
 
-    def map_io_space(self, physical_address, length, cache_type):
+    def map_io_space(self, physical_address: int, length: int, cache_type: int) -> int:
         return physical_address
 
-    def read_mmio_reg(self, phys_address, size):
-        out_buf = self.read_physical_mem(phys_address, size)
+    def read_mmio_reg(self, phys_address: int, size: int) -> int:
+        out_buf = self.read_phys_mem(phys_address, size)
         if size == 8:
             value = struct.unpack('=Q', out_buf[:size])[0]
         elif size == 4:
@@ -385,7 +345,7 @@ class DALHelper(Helper):
             value = 0
         return value
 
-    def write_mmio_reg(self, phys_address, size, value):
+    def write_mmio_reg(self, phys_address: int, size: int, value: int) -> int:
         if size == 8:
             buf = struct.pack('=Q', value)
         elif size == 4:
@@ -395,79 +355,61 @@ class DALHelper(Helper):
         elif size == 1:
             buf = struct.pack('=B', value & 0xFF)
         else:
-            buf = 0
-        self.write_physical_mem(phys_address, size, buf)
+            buf = bytes(1)
+        return self.write_phys_mem(phys_address, size, buf)
 
     #
     # Interrupts
     #
     def send_sw_smi(self, cpu_thread_id, SMI_code_data, _rax, _rbx, _rcx, _rdx, _rsi, _rdi):
-        if logger().DEBUG:
-            logger().log_error('[DAL] API send_sw_smi() is not supported')
-        return None
+        raise UnimplementedAPIError('send_sw_smi')
 
     def set_affinity(self, value):
-        if logger().DEBUG:
-            logger().log_error('[DAL] API set_affinity() is not supported')
-        return 0
+        raise UnimplementedAPIError('set_affinity')
 
     def get_affinity(self):
-        if logger().DEBUG:
-            logger().log_error('[DAL] API get_affinity() is not supported')
-        return 0
+        raise UnimplementedAPIError('get_affinity')
 
     #
     # ACPI tables access
     #
-    def get_ACPI_SDT(self):
-        if logger().DEBUG:
-            logger().log_error('[DAL] API get_ACPI_SDT() is not supported')
-        return None, None
-
-    def native_get_ACPI_table(self, table_name):
-        if logger().DEBUG:
-            logger().log_error('[DAL] API native_get_ACPI_table() is not supported')
-        return None
-
-    def get_ACPI_table(self, table_name):
-        if logger().DEBUG:
-            logger().log_error('[DAL] API get_ACPI_table() is not supported')
-        return None
+    def get_ACPI_table(self, table_name: str) -> Optional['Array']:
+        raise UnimplementedAPIError('get_ACPI_table')
+    
+    def enum_ACPI_tables(self) -> Optional['Array']:
+        raise UnimplementedAPIError('enum_ACPI_table')
 
     #
     # IOSF Message Bus access
     #
     def msgbus_send_read_message(self, mcr, mcrx):
-        if logger().DEBUG:
-            logger().log_error('[DAL] API msgbus_send_read_message() is not supported')
-        return None
+        raise UnimplementedAPIError('msgbus_send_read_message')
 
     def msgbus_send_write_message(self, mcr, mcrx, mdr):
-        if logger().DEBUG:
-            logger().log_error('[DAL] API msgbus_send_write_message() is not supported')
-        return None
+        raise UnimplementedAPIError('msgbus_send_write_message')
 
-    def msgbus_send_message(self, mcr, mcrx, mdr=None):
-        if logger().DEBUG:
-            logger().log_error('[DAL] API msgbus_send_message() is not supported')
-        return None
+    def msgbus_send_message(self, mcr, mcrx, mdr):
+        raise UnimplementedAPIError('msgbus_send_message')
 
     #
     # File system
     #
-    def get_tool_info(self, tool_type):
-        if logger().DEBUG:
-            logger().log_error('[DAL] API get_tool_info() is not supported')
-        return None, None
+    def get_tool_info(self, tool_type: str) -> Tuple[str, str]:
+        return ('', '')
 
 
-def get_helper():
+    def hypercall(self, rcx, rdx, r8, r9, r10, r11, rax, rbx, rdi, rsi, xmm_buffer):
+        raise UnimplementedAPIError('hypercall')
+
+
+
+def get_helper() -> DALHelper:
     return DALHelper()
 
 
 if __name__ == '__main__':
     try:
-        print('Not doing anything...')
+        logger().log('Not doing anything...')
 
     except DALHelperError as msg:
         if logger().DEBUG:

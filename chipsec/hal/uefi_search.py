@@ -26,19 +26,20 @@
 # -------------------------------------------------------------------------------
 
 """
-UEFI image search auxilliary functionality
+UEFI image search auxillary functionality
 
 usage:
    >>> chipsec.hal.uefi_search.check_match_criteria(efi_module, match_criteria, self.logger)
 """
 
 import re
-import binascii
+from collections.abc import Callable
+from typing import Dict, Optional, Any
 from uuid import UUID
 
-from chipsec import defines
+from chipsec.library import defines
 from chipsec.hal.spi_uefi import EFI_SECTION
-from chipsec.logger import logger
+from chipsec.library.logger import logger
 
 #
 # - EFI binaries are searched according to criteria defined by "match" rules.
@@ -82,11 +83,11 @@ from chipsec.logger import logger
 # Unless it's a EFI binary:
 # - with MD5 hash "HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH" AND SHA-1 hash "HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH"
 #
-# 
+#
 # "UEFI_vulnerabilityY": {
 #     "description": "Something else to be scared of!",
 #     "match": {
-#       "vulnY_rule1": {"guid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "cpuid": "12345,abcde" }  
+#       "vulnY_rule1": {"guid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "cpuid": "12345,abcde" }
 #     }
 #   }
 #
@@ -102,7 +103,7 @@ MATCH_HASH_SHA256 = (0x1 << 5)
 MATCH_CPUID = (0x1 << 6)
 
 
-def check_rules(efi, rules, entry_name, _log, bLog=True, cpuid=None):
+def check_rules(efi: EFI_SECTION, rules: Dict[str, Any], entry_name: str, _log: Callable, bLog: bool = True, cpuid: Optional[str] = None) -> bool:
     bfound = False
     for name, rule in rules.items():
         what = None
@@ -110,7 +111,7 @@ def check_rules(efi, rules, entry_name, _log, bLog=True, cpuid=None):
         offset = 0
         match_mask = 0x00000000
         match_result = 0x00000000
-        fname = "{}.{}".format(entry_name, name)
+        fname = f'{entry_name}.{name}'
         #
         # Determine which criteria are defined in the current rule
         #
@@ -145,7 +146,7 @@ def check_rules(efi, rules, entry_name, _log, bLog=True, cpuid=None):
             if m:
                 match_result |= MATCH_REGEXP
                 _str = m.group(0)
-                hexver = binascii.hexlify(_str)
+                hexver = _str.hex()
                 printver = f" ('{_str}')" if defines.is_printable(_str) else ''
                 what = f"bytes '{hexver}'{printver}"
                 offset = m.start()
@@ -159,13 +160,13 @@ def check_rules(efi, rules, entry_name, _log, bLog=True, cpuid=None):
             if efi.SHA256 == rule['sha256']:
                 match_result |= MATCH_HASH_SHA256
         if (match_mask & MATCH_CPUID) == MATCH_CPUID:
-            if not cpuid:
+            if cpuid is None:
                 cpuidwhat = f"Unable to identify platform. Check system's CPUID and compare it against list:\n\t\t{rule['cpuid']}"
                 match_result |= MATCH_CPUID
             else:
                 cpuids = rule['cpuid'].upper().split(',')
-                if cpuid.upper() in cpuids:
-                    cpuidwhat = cpuid.upper()
+                if f'{cpuid:X}' in cpuids:
+                    cpuidwhat = f'{cpuid:X}'
                     match_result |= MATCH_CPUID
 
         brule_match = ((match_result & match_mask) == match_mask)
@@ -193,11 +194,11 @@ def check_rules(efi, rules, entry_name, _log, bLog=True, cpuid=None):
     return bfound
 
 
-def check_match_criteria(efi, criteria, _log, cpuid=None):
+def check_match_criteria(efi: EFI_SECTION, criteria: Dict[str, Dict[str, Dict[str, str]]], _log: Callable, cpuid: Optional[str] = None) -> bool:
     bfound = False
     if _log is None:
         _log = logger()
-    _log.log("[uefi] checking {}".format(efi.name()))
+    _log.log(f'[uefi] Checking {efi.name()}')
     for k in criteria.keys():
         entry = criteria[k]
         # Check if the EFI binary is a match
@@ -207,11 +208,11 @@ def check_match_criteria(efi, criteria, _log, cpuid=None):
                 _log.log_important(f"found EFI binary matching '{k}'")
                 if 'description' in entry:
                     _log.log(f"    {entry['description']}")
-                _log.log(efi)
+                _log.log(str(efi))
                 # Check if the matched binary should be excluded
                 # There's no point in checking a binary against exclusions if it wasn't a match
                 if 'exclude' in entry:
-                    if check_rules(efi, entry['exclude'], "{}.exclude".format(k), _log, cpuid=cpuid):
+                    if check_rules(efi, entry['exclude'], f'{k}.exclude', _log, cpuid=cpuid):
                         _log.log_important(f"matched EFI binary is excluded from '{k}'. Skipping...")
                         continue
             # we are here if the matched binary wasn't excluded

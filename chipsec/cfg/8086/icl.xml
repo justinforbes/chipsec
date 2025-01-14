@@ -27,7 +27,7 @@ chipsec@intel.com
   <!-- Information                          -->
   <!--                                      -->
   <!-- #################################### -->
-  <info family="core" detection_value="706e4, 706E5">
+  <info family="core" detection_value="0x706e4, 0x706E5">
     <sku did="0x8A00" name="IceLake" code="ICL" longname="(IceLake Y 2 Cores)" />
     <sku did="0x8A02" name="IceLake" code="ICL" longname="(IceLake U 2 Cores)" />
     <sku did="0x8A10" name="IceLake" code="ICL" longname="(IceLake Y 4 Cores)" />
@@ -94,7 +94,7 @@ chipsec@intel.com
     </register>
     <register name="MSR_SMM_FEATURE_CONTROL" type="msr" msr="0x4E0" desc="Enhanced SMM Feature Control">
       <field name="LOCK"            bit="0" size="1"  desc="Lock bit" />
-      <field name="SMM_Code_Chk_En" bit="2" size="1"  desc="Prevents SMM from executing code outside the ranges defined by the SMRR" />
+      <field name="SMM_CODE_CHK_EN" bit="2" size="1"  desc="Prevents SMM from executing code outside the ranges defined by the SMRR" />
     </register>
     <register name="PRMRR_UNCORE_PHYBASE" undef="Not defined for the platform" />
     <register name="PRMRR_UNCORE_MASK" undef="Not defined for the platform" />

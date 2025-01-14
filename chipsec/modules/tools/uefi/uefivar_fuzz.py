@@ -63,10 +63,11 @@ from time import time
 from uuid import uuid4, UUID
 import struct
 
-from chipsec.module_common import BaseModule, ModuleResult
-from chipsec.file import write_file
+from chipsec.module_common import BaseModule
+from chipsec.library.returncode import ModuleResult
+from chipsec.library.file import write_file
 from chipsec.hal.uefi import UEFI
-from chipsec.defines import bytestostring
+from chipsec.library.defines import bytestostring
 
 from chipsec.fuzzing import primitives as prim
 
@@ -81,7 +82,6 @@ class uefivar_fuzz(BaseModule):
         supported = self.cs.helper.EFI_supported()
         if not supported:
             self.logger.log_important("OS does not support UEFI Runtime API.  Skipping module.")
-            self.res = ModuleResult.NOTAPPLICABLE
         return supported
 
     def rnd(self, n=1):
@@ -174,10 +174,10 @@ class uefivar_fuzz(BaseModule):
 
             if not len(module_argv):
                 fz_cli = 'all'
-            self.logger.log('Test      : {}'.format(fz_cli))
-            self.logger.log('Iterations: {:d}'.format(ITERATIONS))
-            self.logger.log('Seed      : {:d}'.format(SEED))
-            self.logger.log('Test case : {:d}'.format(CASE))
+            self.logger.log(f'Test      : {fz_cli}')
+            self.logger.log(f'Iterations: {ITERATIONS:d}')
+            self.logger.log(f'Seed      : {SEED:d}')
+            self.logger.log(f'Test case : {CASE:d}')
             self.logger.log('')
             for count in range(1, ITERATIONS + CASE):
                 if FUZZ_NAME:
@@ -216,7 +216,7 @@ class uefivar_fuzz(BaseModule):
                 if count < CASE:
                     continue
 
-                self.logger.log('  Running test #{:d}:'.format(count))
+                self.logger.log(f'  Running test #{count:d}:')
                 self.logger.flush()
                 status = self._uefi.set_EFI_variable(bytestostring(_NAME), str(_GUID), _DATA, _SIZE, _ATTRIB)
                 self.logger.log(status)
@@ -227,5 +227,5 @@ class uefivar_fuzz(BaseModule):
         self.logger.log_important('Evaluate the platform for expected behavior to determine PASS/FAIL')
         self.logger.log_important('Behavior can include platform stability and retaining protections.')
 
-        self.res = ModuleResult.WARNING
-        return self.res
+        self.result.setStatusBit(self.result.status.VERIFY)
+        return self.result.getReturnCode(ModuleResult.WARNING)

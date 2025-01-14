@@ -33,6 +33,7 @@ Examples:
 KEY:
     Lock Name - Name of Lock within configuration file
     State     - Lock Configuration
+    
         Undefined - Lock is not defined within configuration
         Undoc     - Lock is missing configuration information
         Hidden    - Lock is in a disabled or hidden state (unable to read the lock)
@@ -42,19 +43,21 @@ KEY:
 
 """
 
-from time import time
 from argparse import ArgumentParser
 
-from chipsec.command import BaseCommand
+from chipsec.command import BaseCommand, toLoad
 from chipsec.hal.locks import locks, LockResult
-from chipsec.defines import is_set
+from chipsec.library.defines import is_set
 
 
 class LOCKCHECKCommand(BaseCommand):
 
     version = "0.5"
 
-    def requires_driver(self) -> bool:
+    def requirements(self) -> toLoad:
+        return toLoad.All
+
+    def parse_arguments(self) -> None:
         parser = ArgumentParser(prog='chipsec_util check', usage=LOCKCHECKCommand.__doc__)
 
         parser_lockname = ArgumentParser(add_help=False)
@@ -74,9 +77,20 @@ class LOCKCHECKCommand(BaseCommand):
         parser_check = subparsers.add_parser('lock', parents=[parser_lockname])
         parser_check.set_defaults(func=self.check_lock)
 
-        parser.parse_args(self.argv[2:], namespace=self)
+        parser.parse_args(self.argv, namespace=self)
 
-        return True
+    def set_up(self) -> None:
+        self.flip_consistency_checking = False
+        if not self.cs.consistency_checking:
+            self.flip_consistency_checking = True
+            self.cs.consistency_checking = True
+        self.logger.set_always_flush(True)
+        self._locks = locks(self.cs)
+    
+    def tear_down(self) -> None:
+        self.logger.set_always_flush(False)
+        if self.flip_consistency_checking:
+            self.cs.consistency_checking = False
 
     def log_key(self) -> None:
         self.logger.log("""
@@ -139,7 +153,7 @@ KEY:
             res_str = 'Undoc'
         elif not is_set(is_locked, LockResult.CAN_READ):
             res_str = 'Hidden'
-        elif self.cs.get_lock_type(lock) == "RW/O":
+        elif self.cs.lock.get_type(lock) == "RW/O":
             res_str = 'RW/O'
         elif is_set(is_locked, LockResult.LOCKED):
             res_str = 'Locked'
@@ -155,19 +169,6 @@ KEY:
         if not self.logger.HAL:
             self.logger.log(res)
         return res
-
-    def run(self) -> None:
-        CONSISTENCY_CHECKING = True
-        self.logger.set_always_flush(True)
-        try:
-            self._locks = locks(self.cs)
-        except Exception as msg:
-            self.logger.log(msg)
-            return
-        t = time()
-        self.func()
-        self.logger.set_always_flush(False)
-        self.logger.log(f"[CHIPSEC] (Lock Check) time elapsed {time() - t:.3f}")
 
 
 commands = {'check': LOCKCHECKCommand}

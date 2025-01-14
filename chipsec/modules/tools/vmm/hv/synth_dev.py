@@ -34,14 +34,14 @@ Usage:
 
 Note: the fuzzer is incompatible with native VMBus driver (``vmbus.sys``). To use it, remove ``vmbus.sys``
 """
-import time
-from struct import *
-from random import *
-from binascii import *
-from chipsec.modules.tools.vmm.hv.define import *
-from chipsec.modules.tools.vmm.common import *
-from chipsec.modules.tools.vmm.hv.vmbus import *
-import chipsec_util
+import sys
+import traceback
+from struct import pack
+from chipsec.library.returncode import ModuleResult
+from chipsec.module_common import BaseModule
+from chipsec.modules.tools.vmm.common import session_logger, get_int_arg
+from chipsec.modules.tools.vmm.hv.define import VMBUS_DATA_PACKET_FLAG_COMPLETION_REQUESTED, vm_pkt
+from chipsec.modules.tools.vmm.hv.vmbus import RingBuffer, VMBusDiscovery
 
 sys.stdout = session_logger(True, 'synth_dev')
 
@@ -54,7 +54,8 @@ class VMBusDeviceFuzzer(VMBusDiscovery):
     def send_1(self, relid, messages, info, order):
         if len(messages) > 0:
             msg_sent = messages.pop(0)
-            self.vmbus_sendpacket(relid, msg_sent, 0x0, VM_PKT_DATA_INBAND, VMBUS_DATA_PACKET_FLAG_COMPLETION_REQUESTED)
+            vmpkt_datainband = list(vm_pkt.keys())[list(vm_pkt.values()).index('VM_PKT_DATA_INBAND')]
+            self.vmbus_sendpacket(relid, msg_sent, 0x0, vmpkt_datainband, VMBUS_DATA_PACKET_FLAG_COMPLETION_REQUESTED)
             msg_recv = self.vmbus_recvpacket(relid)
             if msg_recv != '':
                 (msg1, msg2) = (msg_recv, msg_sent) if order else (msg_sent, msg_recv)
@@ -83,7 +84,7 @@ class VMBusDeviceFuzzer(VMBusDiscovery):
         if len(info) == 0:
             return
         for i in self.responses:
-            self.msg('{}{:20}:{:20}  {:4d}'.format('  ' * indent, hexlify(i), hexlify(info[i]['message']), info[i]['count']))
+            self.msg(f'{"  " * indent}{i.hex():20}:{info[i]["message"].hex():20}  {info[i]["count"]:4d}')
             self.print_1(info[i]['next'], indent + 1)
         return
 
@@ -94,13 +95,11 @@ class VMBusDeviceFuzzer(VMBusDiscovery):
 
 
 class synth_dev(BaseModule):
+    def __init__(self):
+        BaseModule.__init__(self)
+
     def usage(self):
-        print('  Usage:')
-        print('    chipsec_main.py -i -m tools.vmm.hv.synth_dev -a info')
-        print('      print channel offers')
-        print('    chipsec_main.py -i -m tools.vmm.hv.synth_dev -a fuzz,<relid>')
-        print('      fuzzing device with specified relid')
-        print('  Note: the fuzzer is incompatible with native VMBus driver (vmbus.sys). To use it, remove vmbus.sys')
+        self.logger.log(__doc__)
         return
 
     def run(self, module_argv):
@@ -117,7 +116,7 @@ class synth_dev(BaseModule):
             vb.vmbus_request_offers()
 
             if relid not in [value['child_relid'] for value in vb.offer_channels.values()]:
-                vb.fatal('child relid #{:d} has not been found!'.format(relid))
+                vb.fatal(f'child relid #{relid:d} has not been found!')
 
             vb.ringbuffers[relid] = RingBuffer()
             vb.ringbuffers[relid].debug = False
@@ -133,7 +132,7 @@ class synth_dev(BaseModule):
                 vb.vmbus_close(relid)
                 vb.vmbus_teardown_gpadl(relid, vb.ringbuffers[relid].gpadl)
             elif command == 'fuzz':
-                vb.promt = 'DEVICE {:02d}'.format(relid)
+                vb.promt = f'DEVICE {relid:02d}'
                 vb.msg('Fuzzing VMBus devices ...')
                 vb.device_fuzzing(relid)
                 vb.print_statistics()
@@ -141,12 +140,13 @@ class synth_dev(BaseModule):
                 self.usage()
 
         except KeyboardInterrupt:
-            print('***** Control-C *****')
-        except Exception as error:
-            print('\n\n')
+            self.logger.log('***** Control-C *****')
+        except Exception:
+            self.logger.log('\n\n')
             traceback.print_exc()
-            print('\n\n')
+            self.logger.log('\n\n')
         finally:
             vb.vmbus_rescind_all_offers()
             del vb
-        return ModuleResult.PASSED
+        self.result.setStatusBit(self.result.status.SUCCESS)
+        return self.result.getReturnCode(ModuleResult.PASSED)

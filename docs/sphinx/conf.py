@@ -50,7 +50,14 @@ source_suffix = '.rst'
 # The encoding of source files.
 #source_encoding = 'utf-8-sig'
 
-autodoc_mock_imports = ['efi', 'common', 'itpii', 'fcntl', 'resource', 'chipsec_tools', 'chipsec.chipset', 'edk2']
+autodoc_mock_imports = []
+mock_path = os.path.join(os.getcwd(), '_mock')
+for file in os.listdir(mock_path):
+    with open(os.path.join(mock_path, file), 'r') as f:
+        mock_imports = f.read()
+    for mock in mock_imports.split(','):
+        autodoc_mock_imports.append(mock)
+
 
 # The toctree document.
 main_doc = 'index'
@@ -74,7 +81,7 @@ author = u'CHIPSEC'
 #
 # This is also used if you do content translation via gettext catalogs.
 # Usually you set "language" from the command line for these cases.
-language = None
+language = 'en'
 
 # There are two options for replacing |today|: either, you set today to some
 # non-false value, then it is used:

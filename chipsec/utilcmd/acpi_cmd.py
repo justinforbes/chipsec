@@ -33,12 +33,10 @@ Examples:
 """
 
 from os.path import exists as path_exists
-from time import time
 from argparse import ArgumentParser
 
 from chipsec.hal.acpi import ACPI
-from chipsec.exceptions import AcpiRuntimeError
-from chipsec.command import BaseCommand
+from chipsec.command import BaseCommand, toLoad
 
 # ###################################################################
 #
@@ -48,46 +46,41 @@ from chipsec.command import BaseCommand
 
 
 class ACPICommand(BaseCommand):
+    def requirements(self) -> toLoad:
+        if self.func == self.acpi_table and self._file:
+            return toLoad.Nil # TODO: Fix this case. Need to update ACPI HAL to not try to auto-populate tables.
+        return toLoad.All
 
-    def requires_driver(self):
+    def parse_arguments(self) -> None:
         parser = ArgumentParser(usage=__doc__)
         subparsers = parser.add_subparsers()
         parser_list = subparsers.add_parser('list')
         parser_list.set_defaults(func=self.acpi_list)
+
         parser_table = subparsers.add_parser('table')
         parser_table.add_argument('-f', '--file', dest='_file', help='Read from file', action='store_true')
         parser_table.add_argument('_name', metavar='table|filename', nargs=1, help="table to list")
         parser_table.set_defaults(func=self.acpi_table)
-        parser.parse_args(self.argv[2:], namespace=self)
-        if self.func == self.acpi_table and self._file:
-            return False
-        return True
+        parser.parse_args(self.argv, namespace=self)
 
-    def acpi_list(self):
-        self.logger.log("[CHIPSEC] Enumerating ACPI tables..")
+    def set_up(self) -> None:
+        self._acpi = ACPI(self.cs)
+
+    def acpi_list(self) -> None:
+        self.logger.log('[CHIPSEC] Enumerating ACPI tables..')
         self._acpi.print_ACPI_table_list()
 
-    def acpi_table(self):
+    def acpi_table(self) -> None:
         name = self._name[0]
         if not self._file and not self._acpi.is_ACPI_table_present(name):
-            self.logger.log_error("Please specify table name from {}".format(self._acpi.tableList.keys()))
+            self.logger.log_error(f'Please specify table name from {self._acpi.tableList.keys()}')
             return
         elif self._file and not path_exists(name):
-            self.logger.log_error("[CHIPSEC] Unable to find file '{}'".format(name))
+            self.logger.log_error(f"[CHIPSEC] Unable to find file '{name}'")
             return
-        self.logger.log("[CHIPSEC] reading ACPI table {} '{}'".format('from file' if self._file else '', name))
+        self.logger.log(f"[CHIPSEC] reading ACPI table {'from file' if self._file else ''} '{name}'")
         self._acpi.dump_ACPI_table(name, self._file)
         return
-
-    def run(self):
-        t = time()
-        try:
-            self._acpi = ACPI(self.cs)
-        except AcpiRuntimeError as msg:
-            print(msg)
-            return
-        self.func()
-        self.logger.log("[CHIPSEC] (acpi) time elapsed {:.3f}".format(time() - t))
 
 
 commands = {'acpi': ACPICommand}

@@ -37,17 +37,19 @@ Examples:
 >>> chipsec_util iommu pt
 """
 
-from chipsec.command import BaseCommand
+from chipsec.command import BaseCommand, toLoad
 from chipsec.hal import acpi, iommu
 from argparse import ArgumentParser
-from chipsec.exceptions import IOMMUError, AcpiRuntimeError
-import time
+from chipsec.library.exceptions import IOMMUError, AcpiRuntimeError
 
 
 # I/O Memory Management Unit (IOMMU), e.g. Intel VT-d
 class IOMMUCommand(BaseCommand):
 
-    def requires_driver(self):
+    def requirements(self) -> toLoad:
+        return toLoad.All
+
+    def parse_arguments(self) -> None:
         parser = ArgumentParser(prog='chipsec_util iommu', usage=__doc__)
         subparsers = parser.add_subparsers()
 
@@ -74,25 +76,26 @@ class IOMMUCommand(BaseCommand):
         parser_pt.add_argument('engine', type=str, default='', nargs='?', help='IOMMU Engine')
         parser_pt.set_defaults(func=self.iommu_pt)
 
-        parser.parse_args(self.argv[2:], namespace=self)
-        return True
+        parser.parse_args(self.argv, namespace=self)
 
-    def iommu_list(self):
-        self.logger.log("[CHIPSEC] Enumerating supported IOMMU engines..")
-        self.logger.log(iommu.IOMMU_ENGINES.keys())
+    def iommu_list(self) -> None:
+        self.logger.log("[CHIPSEC] Enumerating supported IOMMU engine names:")
+        self.logger.log(f'{list(iommu.IOMMU_ENGINES.keys())}')
+        self.logger.log_important('\nNote: These are the IOMMU engine names supported by iommu_cmd.')
+        self.logger.log_important('It does not mean they are supported/enabled in the current platform.')
 
-    def iommu_engine(self, cmd):
+    def iommu_engine(self, cmd) -> None:
         try:
             _iommu = iommu.IOMMU(self.cs)
         except IOMMUError as msg:
-            print(msg)
+            self.logger.log(msg)
             return
 
         if self.engine:
             if self.engine in iommu.IOMMU_ENGINES.keys():
                 _iommu_engines = [self.engine]
             else:
-                self.logger.log_error("IOMMU name {} not recognized. Run 'iommu list' command for supported IOMMU names".format(self.engine))
+                self.logger.log_error(f'IOMMU name \'{self.engine}\' not recognized. Run \'iommu list\' command for supported IOMMU names')
                 return
         else:
             _iommu_engines = iommu.IOMMU_ENGINES.keys()
@@ -101,7 +104,7 @@ class IOMMUCommand(BaseCommand):
             try:
                 _acpi = acpi.ACPI(self.cs)
             except AcpiRuntimeError as msg:
-                print(msg)
+                self.logger.log(msg)
                 return
 
             if _acpi.is_ACPI_table_present(acpi.ACPI_TABLE_SIG_DMAR):
@@ -122,25 +125,23 @@ class IOMMUCommand(BaseCommand):
             elif (cmd == 'disable'):
                 _iommu.set_IOMMU_Translation(e, 0)
 
-    def iommu_config(self):
+    def iommu_config(self) -> None:
         self.iommu_engine('config')
 
-    def iommu_status(self):
+    def iommu_status(self) -> None:
         self.iommu_engine('status')
 
-    def iommu_enable(self):
+    def iommu_enable(self) -> None:
         self.iommu_engine('enable')
 
-    def iommu_disable(self):
+    def iommu_disable(self) -> None:
         self.iommu_engine('disable')
 
-    def iommu_pt(self):
+    def iommu_pt(self) -> None:
         self.iommu_engine('pt')
 
-    def run(self):
-        t = time.time()
+    def run(self) -> None:
         self.func()
-        self.logger.log("[CHIPSEC] (iommu) time elapsed {:.3f}".format(time.time() - t))
 
 
 commands = {'iommu': IOMMUCommand}

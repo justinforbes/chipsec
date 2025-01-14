@@ -117,6 +117,7 @@ typedef struct tagSMI_CONTEXT {
 typedef SMI_CONTEXT SMI_CTX, *PSMI_CTX; 
 
  void __swsmi__(SMI_CTX * ctx); 
+ void __swsmi_timed__(SMI_CTX * ctx, unsigned long * time);
 
   void _rdmsr( 
     unsigned long msr_num, // rdi
@@ -1077,7 +1078,7 @@ static long d_ioctl(struct file *file, unsigned int ioctl_num, unsigned long ioc
 #endif
     }
     
-        case IOCTL_SWSMI:
+    case IOCTL_SWSMI:
     {
         //IN params: SMI_code_data, _rax, _rbx, _rcx, _rdx, _rsi, _rdi 
 #ifdef CONFIG_X86
@@ -1093,6 +1094,37 @@ static long d_ioctl(struct file *file, unsigned int ioctl_num, unsigned long ioc
         __swsmi__((SMI_CTX *)ptr);
 
         if(copy_to_user((void*)ioctl_param, (void*)ptrbuf, (sizeof(long) * numargs)) > 0)
+            return -EFAULT;
+        break;
+#else
+        return -EOPNOTSUPP;
+#endif
+    }
+
+    case IOCTL_SWSMI_TIMED:
+    {
+        //IN params: SMI_code_data, _rax, _rbx, _rcx, _rdx, _rsi, _rdi
+#ifdef CONFIG_X86
+
+        unsigned long flags;
+        unsigned long m_time;
+        
+        printk( KERN_INFO "[chipsec] > IOCTL_SWSMI_TIMED\n");
+        numargs = 7;
+        if(copy_from_user((void*)ptrbuf, (void*)ioctl_param, (sizeof(long) * numargs)) > 0)
+        {
+            printk( KERN_ALERT "[chipsec] ERROR: STATUS_INVALID_PARAMETER\n" );
+            break;
+        }
+
+        preempt_disable();
+        local_irq_save(flags);
+        __swsmi_timed__((SMI_CTX *)ptr, &m_time);
+        local_irq_restore(flags);
+        preempt_enable();
+        ptrbuf[numargs] = m_time;
+
+        if(copy_to_user((void*)ioctl_param, (void*)ptrbuf, (sizeof(long) * (numargs + 1))) > 0)
             return -EFAULT;
         break;
 #else
@@ -1760,14 +1792,10 @@ static unsigned long chipsec_lookup_name(const char *name)
 
     /*
      * Buffer for each line of kallsyms file.
-     * The symbol names are limited to KSYM_NAME_LEN=128. When Linux is
-     * compiled with clang's Control Flow Integrity, there are large symbols
-     * such as
-     * __typeid__ZTSFvPvP15ieee80211_local11set_key_cmdP21ieee80211_sub_if_dataP13ieee80211_staP18ieee80211_key_confE_global_addr
-     * which lead to a line with 142 characters.
-     * Some use a buffer which can hold 256 characters, to be safe.
+     * Linux defines KSYM_NAME_LEN to 512 since 6.1, with a rational documented in commit
+     * https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/include/linux/kallsyms.h?id=b8a94bfb33952bb17fbc65f8903d242a721c533d
      */
-    char proc_ksyms_entry[256] = {0};
+    char proc_ksyms_entry[512] = {0};
 
     proc_ksyms = filp_open("/proc/kallsyms", O_RDONLY, 0);
     if (proc_ksyms == NULL)

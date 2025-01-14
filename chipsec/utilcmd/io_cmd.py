@@ -34,17 +34,18 @@ Examples:
 >>> chipsec_util io write 0x430 1 0x0
 """
 
-import time
 from argparse import ArgumentParser
 
 from chipsec.hal import iobar
-from chipsec.command import BaseCommand
-from chipsec.exceptions import IOBARRuntimeError
+from chipsec.command import BaseCommand, toLoad
 
 
 class PortIOCommand(BaseCommand):
 
-    def requires_driver(self):
+    def requirements(self) -> toLoad:
+        return toLoad.All
+
+    def parse_arguments(self) -> None:
         parser = ArgumentParser(prog='chipsec_util io', usage=__doc__)
         subparsers = parser.add_subparsers()
 
@@ -65,14 +66,15 @@ class PortIOCommand(BaseCommand):
         parser_w.add_argument('_value', metavar='value', type=lambda x: int(x, 0), help="value")
         parser_w.set_defaults(func=self.io_write)
 
-        parser.parse_args(self.argv[2:], namespace=self)
+        parser.parse_args(self.argv, namespace=self)
 
-        return True
+    def set_up(self) -> None:
+        self._iobar = iobar.IOBAR(self.cs)
 
-    def io_list(self):
+    def io_list(self) -> None:
         self._iobar.list_IO_BARs()
 
-    def io_read(self):
+    def io_read(self) -> None:
         if 0x1 == self._width:
             value = self.cs.io.read_port_byte(self._port)
         elif 0x2 == self._width:
@@ -82,10 +84,10 @@ class PortIOCommand(BaseCommand):
         else:
             self.logger.log("Invalid read size requested. 1,2,4 supported")
             return
-        self.logger.log("[CHIPSEC] IN 0x{:04X} -> 0x{:08X} (size = 0x{:02X})".format(self._port, value, self._width))
+        self.logger.log(f'[CHIPSEC] IN 0x{self._port:04X} -> 0x{value:08X} (size = 0x{self._width:02X})')
         return
 
-    def io_write(self):
+    def io_write(self) -> None:
         if 0x1 == self._width:
             self.cs.io.write_port_byte(self._port, self._value)
         elif 0x2 == self._width:
@@ -96,21 +98,7 @@ class PortIOCommand(BaseCommand):
             self.logger.log("Invalid write size requested. 1,2,4 supported")
             return
         self.logger.log(
-            "[CHIPSEC] OUT 0x{:04X} <- 0x{:08X} (size = 0x{:02X})".format(self._port, self._value, self._width))
+            f'[CHIPSEC] OUT 0x{self._port:04X} <- 0x{self._value:08X} (size = 0x{self._width:02X})')
         return
-
-    def run(self):
-        try:
-            self._iobar = iobar.IOBAR(self.cs)
-        except IOBARRuntimeError as msg:
-            self.logger.log(msg)
-            return
-
-        t = time.time()
-
-        self.func()
-
-        self.logger.log("[CHIPSEC] (io) time elapsed {:.3f}".format(time.time() - t))
-
 
 commands = {'io': PortIOCommand}

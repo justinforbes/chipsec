@@ -44,11 +44,10 @@ Examples:
 """
 
 import os
-from time import time
 from argparse import ArgumentParser
 
-from chipsec.file import read_file, write_file
-from chipsec.command import BaseCommand
+from chipsec.library.file import read_file, write_file
+from chipsec.command import BaseCommand, toLoad
 
 from chipsec.hal.spi import FLASH_DESCRIPTOR, BIOS
 from chipsec.hal.spi_descriptor import get_spi_flash_descriptor, get_spi_regions, parse_spi_flash_descriptor
@@ -58,28 +57,36 @@ from chipsec.hal.uefi import uefi_platform
 
 class DecodeCommand(BaseCommand):
 
-    def requires_driver(self):
+    def requirements(self) -> toLoad:
+        return toLoad.Nil
+    
+    def parse_arguments(self) -> None:
         parser = ArgumentParser(usage=__doc__)
         parser.add_argument('_rom', metavar='<rom>', help='file to decode')
         parser.add_argument('_fwtype', metavar='fw_type', nargs='?', help='firmware type', default=None)
-        parser.parse_args(self.argv[2:], namespace=self)
-        return False
+        parser.parse_args(self.argv, namespace=self)
+        
+        if self._rom.lower() == 'types':
+            self.func = self.decode_types
+        else:
+            self.func = self.decode_rom
 
-    def decode_types(self):
-        self.logger.log("\n<fw_type> should be in [ {} ]\n".format(" | ".join(["{}".format(t) for t in uefi_platform.fw_types])))
 
-    def decode_rom(self):
-        self.logger.log("[CHIPSEC] Decoding SPI ROM image from a file '{}'".format(self._rom))
+    def decode_types(self) -> None:
+        self.logger.log(f'\n<fw_type> should be in [ {" | ".join([f"{t}" for t in uefi_platform.fw_types])} ]\n')
+
+    def decode_rom(self) -> bool:
+        self.logger.log(f'[CHIPSEC] Decoding SPI ROM image from a file \'{self._rom}\'')
         f = read_file(self._rom)
         if not f:
             return False
         (fd_off, fd) = get_spi_flash_descriptor(f)
         if (-1 == fd_off) or (fd is None):
-            self.logger.log_error("Could not find SPI Flash descriptor in the binary '{}'".format(self._rom))
+            self.logger.log_error(f'Could not find SPI Flash descriptor in the binary \'{self._rom}\'')
             self.logger.log_information("To decode an image without a flash decriptor try chipsec_util uefi decode")
             return False
 
-        self.logger.log("[CHIPSEC] Found SPI Flash descriptor at offset 0x{:X} in the binary '{}'".format(fd_off, self._rom))
+        self.logger.log(f'[CHIPSEC] Found SPI Flash descriptor at offset 0x{fd_off:X} in the binary \'{self._rom}\'')
         rom = f[fd_off:]
 
         # Decoding SPI Flash Regions
@@ -91,7 +98,7 @@ class DecodeCommand(BaseCommand):
 
         _orig_logname = self.logger.LOG_FILE_NAME
 
-        pth = os.path.join(self.cs.helper.getcwd(), self._rom + ".dir")
+        pth = os.path.join(self.cs.os_helper.getcwd(), self._rom + ".dir")
         if not os.path.exists(pth):
             os.makedirs(pth)
 
@@ -103,26 +110,19 @@ class DecodeCommand(BaseCommand):
             notused = r[5]
             if not notused:
                 region_data = rom[base:limit + 1]
-                fname = os.path.join(pth, '{:d}_{:04X}-{:04X}_{}.bin'.format(idx, base, limit, name))
+                fname = os.path.join(pth, f'{idx:d}_{base:04X}-{limit:04X}_{name}.bin')
                 write_file(fname, region_data)
                 if FLASH_DESCRIPTOR == idx:
                     # Decoding Flash Descriptor
-                    self.logger.set_log_file(os.path.join(pth, fname + '.log'))
+                    self.logger.set_log_file(os.path.join(pth, fname + '.log'), False)
                     parse_spi_flash_descriptor(self.cs, region_data)
                 elif BIOS == idx:
                     # Decoding EFI Firmware Volumes
-                    self.logger.set_log_file(os.path.join(pth, fname + '.log'))
+                    self.logger.set_log_file(os.path.join(pth, fname + '.log'), False)
                     decode_uefi_region(pth, fname, self._fwtype)
 
         self.logger.set_log_file(_orig_logname)
-
-    def run(self):
-        t = time()
-        if self._rom.lower() == 'types':
-            self.decode_types()
-        else:
-            self.decode_rom()
-        self.logger.log("[CHIPSEC] (decode) time elapsed {:.3f}".format(time() - t))
+        return True
 
 
 commands = {"decode": DecodeCommand}
